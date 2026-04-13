@@ -121,7 +121,8 @@ jobs:
       # ── Start OTel Collector ──────────────────────────────────────────
       - name: Start OTel Collector
         run: |
-          mkdir -p collector-output
+          mkdir -p collector-output && chmod 777 collector-output
+          export OTEL_UID=$(id -u) OTEL_GID=$(id -g)
           docker compose up -d
           echo "Waiting for collector to accept connections..."
           for i in $(seq 1 30); do

@@ -4,7 +4,7 @@
 //! # Prerequisites
 //!
 //! ```bash
-//! docker compose up -d
+//! docker compose up -d   # start fresh collector
 //! ```
 //!
 //! # Running
@@ -20,25 +20,7 @@ use std::time::Duration;
 
 const TRACES_FILE: &str = "collector-output/traces.jsonl";
 
-/// Restart the collector to get a clean trace file.
-fn reset_collector() {
-    use std::process::Command;
-
-    // Remove old output so the collector creates a fresh file
-    let _ = std::fs::remove_file(TRACES_FILE);
-
-    // Restart the container so it opens a fresh file descriptor
-    Command::new("docker")
-        .args(["compose", "restart", "otel-collector"])
-        .status()
-        .expect("failed to restart collector");
-
-    // Wait for it to be ready (TCP accept + gRPC init)
-    wait_for_collector();
-    std::thread::sleep(Duration::from_secs(2));
-}
-
-/// Wait for the collector to accept gRPC connections.
+/// Wait for the collector to accept gRPC connections on :4317.
 fn wait_for_collector() {
     use std::net::TcpStream;
     for _ in 0..30 {
@@ -52,7 +34,7 @@ fn wait_for_collector() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn traces_contain_enriched_resource_attributes() {
-    reset_collector();
+    wait_for_collector();
 
     // Bootstrap telemetry — exports to localhost:4317 (the collector)
     let handles =
