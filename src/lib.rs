@@ -13,6 +13,9 @@
 #[cfg(not(any(feature = "grpc", feature = "http")))]
 compile_error!("at least one transport feature must be enabled: `grpc` or `http`");
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;

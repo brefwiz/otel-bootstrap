@@ -11,6 +11,7 @@ default = ["grpc"]
 grpc = ["opentelemetry-otlp/grpc-tonic"]
 http = ["opentelemetry-otlp/http-proto", "opentelemetry-otlp/reqwest-client"]
 integration-tests = []
+testing = ["opentelemetry_sdk/testing"]
 
 [dependencies]
 opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
