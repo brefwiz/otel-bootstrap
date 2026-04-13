@@ -65,6 +65,7 @@ impl crate::Telemetry {
             tracer_provider,
             meter_provider: Some(meter_provider),
             logger_provider: None,
+            shutdown_timeout: crate::DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 }

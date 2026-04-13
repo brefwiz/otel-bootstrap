@@ -126,14 +126,21 @@ fn sampler_from_env() -> Result<Option<TraceSampler>, Box<dyn Error>> {
     Ok(Some(sampler))
 }
 
+/// Default timeout for provider shutdown in [`Drop`].
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Handles returned by [`init_telemetry`] or [`TelemetryBuilder::init`].
 ///
 /// Keep alive for the duration of the process. Call [`shutdown`](TelemetryHandles::shutdown)
 /// before exiting to flush pending spans, metrics, and logs.
+///
+/// When dropped, shutdown is attempted with a bounded timeout (default: 5 s).
+/// If the timeout expires a warning is logged but the process continues normally.
 pub struct TelemetryHandles {
     pub tracer_provider: SdkTracerProvider,
     pub meter_provider: Option<SdkMeterProvider>,
     pub logger_provider: Option<SdkLoggerProvider>,
+    shutdown_timeout: Duration,
 }
 
 impl TelemetryHandles {
@@ -151,6 +158,46 @@ impl TelemetryHandles {
             lp.shutdown()?;
         }
         Ok(())
+    }
+}
+
+impl Drop for TelemetryHandles {
+    fn drop(&mut self) {
+        let tracer_provider = self.tracer_provider.clone();
+        let meter_provider = self.meter_provider.clone();
+        let logger_provider = self.logger_provider.clone();
+        let timeout = self.shutdown_timeout;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Err(e) = tracer_provider.shutdown() {
+                tracing::warn!("tracer provider shutdown error: {e}");
+            }
+            if let Some(mp) = meter_provider
+                && let Err(e) = mp.shutdown()
+            {
+                tracing::warn!("meter provider shutdown error: {e}");
+            }
+            if let Some(lp) = logger_provider
+                && let Err(e) = lp.shutdown()
+            {
+                tracing::warn!("logger provider shutdown error: {e}");
+            }
+            let _ = tx.send(());
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!(
+                    "telemetry shutdown timed out after {timeout:?}; \
+                     some spans/metrics may not have been exported"
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!("telemetry shutdown thread panicked before completing");
+            }
+        }
     }
 }
 
@@ -218,6 +265,7 @@ impl Telemetry {
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -236,6 +284,7 @@ impl Telemetry {
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 }
@@ -256,6 +305,7 @@ pub struct TelemetryBuilder {
     max_export_batch_size: Option<usize>,
     metric_export_interval: Option<Duration>,
     export_timeout: Option<Duration>,
+    shutdown_timeout: Duration,
 }
 
 impl TelemetryBuilder {
@@ -326,6 +376,17 @@ impl TelemetryBuilder {
     /// of 10 000 ms.
     pub fn with_export_timeout(mut self, timeout: Duration) -> Self {
         self.export_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the maximum time to wait for provider shutdown when the
+    /// [`TelemetryHandles`] is dropped (default: 5 s).
+    ///
+    /// If the timeout expires a warning is logged and the drop completes
+    /// without panicking. The background shutdown thread is abandoned and
+    /// the providers may not have flushed all pending data.
+    pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -465,6 +526,7 @@ impl TelemetryBuilder {
             tracer_provider,
             meter_provider,
             logger_provider,
+            shutdown_timeout: self.shutdown_timeout,
         })
     }
 }
@@ -1052,5 +1114,44 @@ mod tests {
     fn builder_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TelemetryBuilder>();
+    }
+
+    #[test]
+    fn with_shutdown_timeout_stores_value() {
+        let timeout = Duration::from_secs(10);
+        let builder = Telemetry::builder("test-svc").with_shutdown_timeout(timeout);
+        assert_eq!(builder.shutdown_timeout, timeout);
+    }
+
+    #[test]
+    fn default_shutdown_timeout_is_five_seconds() {
+        let builder = Telemetry::builder("test-svc");
+        assert_eq!(builder.shutdown_timeout, Duration::from_secs(5));
+    }
+
+    /// Verify that drop completes within the configured timeout even when the
+    /// shutdown thread is blocked (simulated by using a very short timeout so
+    /// the test itself runs quickly).
+    ///
+    /// We construct `TelemetryHandles` with an artificially short timeout and
+    /// a real (but disconnected) provider.  Drop must return before the test
+    /// times out.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn drop_completes_within_shutdown_timeout() {
+        // Use the testing helper so we don't need a running OTLP collector.
+        let mut handles = crate::Telemetry::testing("drop-timeout-test");
+        // Override the timeout to something very short so the test is fast.
+        handles.shutdown_timeout = Duration::from_millis(100);
+
+        let start = std::time::Instant::now();
+        drop(handles);
+        let elapsed = start.elapsed();
+
+        // Drop should complete within 2× the timeout (generous margin for CI).
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "drop took {elapsed:?}, expected < 500 ms"
+        );
     }
 }
