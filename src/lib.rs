@@ -56,6 +56,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// [`init_telemetry_with_sampler`], the library falls back to the
 /// `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables,
 /// and finally to [`TraceSampler::AlwaysOn`] for backward compatibility.
+///
+/// # Example
+/// ```
+/// use otel_bootstrap::TraceSampler;
+///
+/// // Sample 10 % of root spans; inherit parent decision for child spans.
+/// let sampler = TraceSampler::ParentBased(Box::new(TraceSampler::TraceIdRatio(0.1)));
+/// ```
 #[derive(Debug, Clone)]
 pub enum TraceSampler {
     /// Record every trace (the default).
@@ -139,6 +147,19 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// When dropped, shutdown is attempted with a bounded timeout (default: 5 s).
 /// If the timeout expires a warning is logged but the process continues normally.
+///
+/// # Example
+/// ```no_run
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let handles = otel_bootstrap::init_telemetry("my-service")?;
+///
+///     // run your application here …
+///
+///     handles.shutdown()?;
+///     Ok(())
+/// }
+/// ```
 pub struct TelemetryHandles {
     pub tracer_provider: SdkTracerProvider,
     pub meter_provider: Option<SdkMeterProvider>,
@@ -152,6 +173,13 @@ impl TelemetryHandles {
     /// Must be called before the tokio runtime shuts down so the batch
     /// exporter can send remaining spans over gRPC. Safe to call multiple
     /// times — subsequent calls are no-ops.
+    ///
+    /// # Example
+    /// ```no_run
+    /// let handles = otel_bootstrap::init_telemetry("my-service").unwrap();
+    /// // … application logic …
+    /// handles.shutdown().expect("telemetry shutdown failed");
+    /// ```
     pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
         self.tracer_provider.shutdown()?;
         if let Some(mp) = &self.meter_provider {
@@ -207,6 +235,19 @@ impl Drop for TelemetryHandles {
 ///
 /// Each variant is only present when its corresponding feature is enabled, so
 /// match expressions are always exhaustive without a fallback arm.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(feature = "grpc")]
+/// # {
+/// use otel_bootstrap::{ExportProtocol, Telemetry};
+///
+/// let _handles = Telemetry::builder("my-service")
+///     .with_protocol(ExportProtocol::Grpc)
+///     .init()
+///     .unwrap();
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportProtocol {
     /// gRPC via tonic (requires the `grpc` feature).
@@ -270,6 +311,12 @@ impl Telemetry {
     /// Create a new [`TelemetryBuilder`] that reads the service name from
     /// `OTEL_SERVICE_NAME`. Falls back to `"unknown_service"` when the env var
     /// is not set, following the OpenTelemetry default resource specification.
+    ///
+    /// # Example
+    /// ```no_run
+    /// // Set OTEL_SERVICE_NAME=my-service in the environment before calling this.
+    /// let _handles = otel_bootstrap::Telemetry::from_env().init().unwrap();
+    /// ```
     pub fn from_env() -> TelemetryBuilder {
         TelemetryBuilder {
             service_name: None,
@@ -292,6 +339,19 @@ impl Telemetry {
 ///
 /// Created via [`Telemetry::builder`] or [`Telemetry::from_env`]. Call
 /// [`.init()`](TelemetryBuilder::init) to consume the builder and start telemetry.
+///
+/// # Example
+/// ```no_run
+/// use std::time::Duration;
+///
+/// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+///     .with_version("1.2.3")
+///     .with_environment("staging")
+///     .with_metrics(true)
+///     .with_shutdown_timeout(Duration::from_secs(10))
+///     .init()
+///     .unwrap();
+/// ```
 #[must_use = "a TelemetryBuilder does nothing until .init() is called"]
 pub struct TelemetryBuilder {
     service_name: Option<String>,
@@ -424,6 +484,19 @@ impl TelemetryBuilder {
     }
 
     /// Consume the builder and initialise OpenTelemetry.
+    ///
+    /// Installs a global tracer provider, meter provider (if enabled), and
+    /// a `tracing` subscriber. Returns an error if any provider fails to
+    /// build (e.g. unknown sampler name, zero metric interval).
+    ///
+    /// # Example
+    /// ```no_run
+    /// let handles = otel_bootstrap::Telemetry::builder("my-service")
+    ///     .with_metrics(false)
+    ///     .init()
+    ///     .expect("telemetry init failed");
+    /// handles.shutdown().ok();
+    /// ```
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
         if let Some(interval) = self.metric_export_interval
             && interval.is_zero()
@@ -708,6 +781,16 @@ fn build_log_exporter(
 ///
 /// Auto-detects `host.name` and `process.pid`. Optionally sets
 /// `service.version` and `deployment.environment` when provided.
+///
+/// # Example
+/// ```
+/// let resource = otel_bootstrap::build_resource(
+///     "my-service",
+///     Some("1.0.0"),
+///     Some("production"),
+/// );
+/// // `resource` can be passed to SdkTracerProvider::builder().with_resource(resource)
+/// ```
 pub fn build_resource(
     service_name: &str,
     service_version: Option<&str>,

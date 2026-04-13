@@ -32,6 +32,13 @@ use tower::{Layer, Service};
 /// trace context propagation.
 ///
 /// Attach to an axum router with [`crate::axum_layer()`].
+///
+/// # Example
+/// ```no_run
+/// use axum::Router;
+///
+/// let app: Router = Router::new().layer(otel_bootstrap::axum_layer());
+/// ```
 #[derive(Clone, Debug)]
 pub struct OtelTraceLayer;
 
@@ -44,6 +51,9 @@ impl<S> Layer<S> for OtelTraceLayer {
 }
 
 /// Tower [`Service`] produced by [`OtelTraceLayer`].
+///
+/// This type is not constructed directly. It is returned by
+/// [`OtelTraceLayer`] when wrapping an inner [`tower::Service`].
 #[derive(Clone, Debug)]
 pub struct OtelTraceService<S> {
     inner: S,
