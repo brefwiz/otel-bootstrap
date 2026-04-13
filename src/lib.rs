@@ -38,7 +38,7 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     Resource,
     logs::SdkLoggerProvider,
-    metrics::{PeriodicReader, SdkMeterProvider},
+    metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
     propagation::{BaggagePropagator, TraceContextPropagator},
     trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider},
 };
@@ -305,6 +305,7 @@ impl Telemetry {
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             extra_layers: Vec::new(),
+            extra_metric_readers: Vec::new(),
         }
     }
 
@@ -331,6 +332,7 @@ impl Telemetry {
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             extra_layers: Vec::new(),
+            extra_metric_readers: Vec::new(),
         }
     }
 }
@@ -368,7 +370,15 @@ pub struct TelemetryBuilder {
     extra_layers: Vec<
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
+    extra_metric_readers: Vec<MeterProviderInstaller>,
 }
+
+/// Type-erased adapter that applies an extra [`MetricReader`] to the
+/// in-progress [`MeterProviderBuilder`]. Stored as a closure so the trait
+/// (which is generic, not object-safe in a useful way here) can be ranged
+/// over uniformly inside [`TelemetryBuilder`].
+type MeterProviderInstaller =
+    Box<dyn FnOnce(MeterProviderBuilder) -> MeterProviderBuilder + Send + Sync>;
 
 impl TelemetryBuilder {
     /// Set the service version (maps to `service.version` resource attribute).
@@ -475,6 +485,47 @@ impl TelemetryBuilder {
     /// # Ok(())
     /// # }
     /// ```
+    /// Customise the [`MeterProviderBuilder`] before it is built.
+    ///
+    /// Runs after the built-in OTLP `PeriodicReader` is attached (when
+    /// [`with_metrics`](Self::with_metrics) is enabled) and before
+    /// `.build()` is called. The closure is the escape hatch for everything
+    /// the explicit builder methods do not cover — most importantly,
+    /// installing **additional [`MetricReader`]s** like
+    /// [`opentelemetry-prometheus`](https://crates.io/crates/opentelemetry-prometheus)
+    /// alongside the OTLP push, so the same instruments fan out to multiple
+    /// transports without double-counting.
+    ///
+    /// May be called multiple times; closures run in registration order.
+    /// Has no effect when `with_metrics(false)` is also set on the builder —
+    /// when metrics are disabled, no `MeterProvider` is created at all.
+    ///
+    /// `MetricReader` is intentionally not nameable from outside
+    /// `opentelemetry_sdk`, so the closure form is the only way to attach
+    /// readers without leaking unstable trait names through this crate's
+    /// public API.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // With `opentelemetry-prometheus` in scope:
+    /// let registry = prometheus::Registry::new();
+    /// let exporter = opentelemetry_prometheus::exporter()
+    ///     .with_registry(registry.clone())
+    ///     .build()?;
+    /// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+    ///     .with_meter_provider_setup(move |b| b.with_reader(exporter))
+    ///     .init()?;
+    /// // ...mount `registry` at GET /metrics in your HTTP layer.
+    /// ```
+    pub fn with_meter_provider_setup<F>(mut self, setup: F) -> Self
+    where
+        F: FnOnce(MeterProviderBuilder) -> MeterProviderBuilder + Send + Sync + 'static,
+    {
+        self.extra_metric_readers.push(Box::new(setup));
+        self
+    }
+
     pub fn with_layer<L>(mut self, layer: L) -> Self
     where
         L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
@@ -585,10 +636,13 @@ impl TelemetryBuilder {
                 PeriodicReader::builder(metric_exporter).build()
             };
 
-            let mp = SdkMeterProvider::builder()
+            let mut mp_builder = SdkMeterProvider::builder()
                 .with_resource(resource.clone())
-                .with_reader(periodic_reader)
-                .build();
+                .with_reader(periodic_reader);
+            for installer in self.extra_metric_readers {
+                mp_builder = installer(mp_builder);
+            }
+            let mp = mp_builder.build();
 
             opentelemetry::global::set_meter_provider(mp.clone());
 

@@ -171,6 +171,64 @@ async fn with_layer_builder_accepts_custom_layer() {
 }
 
 #[tokio::test]
+async fn with_meter_provider_setup_runs_in_registration_order() {
+    // Each closure pushes a marker onto a shared Vec; assert ordering after init.
+    use std::sync::{Arc, Mutex};
+
+    let order: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let order_a = Arc::clone(&order);
+    let order_b = Arc::clone(&order);
+    let order_c = Arc::clone(&order);
+
+    let handles = Telemetry::builder("setup-order-test")
+        .with_metrics(true)
+        .with_meter_provider_setup(move |b| {
+            order_a.lock().unwrap().push(1);
+            b
+        })
+        .with_meter_provider_setup(move |b| {
+            order_b.lock().unwrap().push(2);
+            b
+        })
+        .with_meter_provider_setup(move |b| {
+            order_c.lock().unwrap().push(3);
+            b
+        })
+        .init()
+        .expect("init should succeed");
+
+    assert_eq!(*order.lock().unwrap(), vec![1, 2, 3]);
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn with_meter_provider_setup_is_noop_when_metrics_disabled() {
+    // When `with_metrics(false)` short-circuits the meter provider entirely,
+    // any registered setup closures must NOT run — they would otherwise
+    // panic on a builder that was never created.
+    use std::sync::{Arc, Mutex};
+    let ran = Arc::new(Mutex::new(false));
+    let ran_clone = Arc::clone(&ran);
+
+    let handles = Telemetry::builder("setup-noop-test")
+        .with_metrics(false)
+        .with_meter_provider_setup(move |b| {
+            *ran_clone.lock().unwrap() = true;
+            b
+        })
+        .init()
+        .expect("init should succeed");
+
+    assert!(handles.meter_provider.is_none());
+    assert!(
+        !*ran.lock().unwrap(),
+        "setup closure must not run when metrics are disabled",
+    );
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
 async fn with_layer_builder_accepts_multiple_custom_layers() {
     let handles = Telemetry::builder("custom-layer-multi")
         .with_metrics(false)
