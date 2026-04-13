@@ -436,11 +436,12 @@ pub fn init_telemetry_with_sampler(
     service_name: &str,
     sampler: Option<TraceSampler>,
 ) -> Result<TelemetryHandles, Box<dyn Error>> {
-    let mut builder = Telemetry::builder(service_name);
-    if let Some(s) = sampler {
-        builder = builder.with_sampler(s);
+    let builder = Telemetry::builder(service_name);
+    match sampler {
+        Some(s) => builder.with_sampler(s),
+        None => builder, // no-op: identical to calling init_telemetry(); not covered by tests (see Makefile ci-coverage note)
     }
-    builder.init()
+    .init()
 }
 
 fn build_span_exporter(
