@@ -67,13 +67,21 @@ fn sampler_from_env() -> Option<TraceSampler> {
         "always_on" => TraceSampler::AlwaysOn,
         "always_off" => TraceSampler::AlwaysOff,
         "traceidratio" => {
-            let ratio = arg.as_deref().unwrap_or("1.0").parse::<f64>().unwrap_or(1.0);
+            let ratio = arg
+                .as_deref()
+                .unwrap_or("1.0")
+                .parse::<f64>()
+                .unwrap_or(1.0);
             TraceSampler::TraceIdRatio(ratio)
         }
         "parentbased_always_on" => TraceSampler::ParentBased(Box::new(TraceSampler::AlwaysOn)),
         "parentbased_always_off" => TraceSampler::ParentBased(Box::new(TraceSampler::AlwaysOff)),
         "parentbased_traceidratio" => {
-            let ratio = arg.as_deref().unwrap_or("1.0").parse::<f64>().unwrap_or(1.0);
+            let ratio = arg
+                .as_deref()
+                .unwrap_or("1.0")
+                .parse::<f64>()
+                .unwrap_or(1.0);
             TraceSampler::ParentBased(Box::new(TraceSampler::TraceIdRatio(ratio)))
         }
         _ => return None,
@@ -302,11 +310,15 @@ mod tests {
 
     /// # Safety helper — env var manipulation is unsafe in Rust 2024 edition.
     unsafe fn set_env(key: &str, val: &str) {
-        unsafe { std::env::set_var(key, val); }
+        unsafe {
+            std::env::set_var(key, val);
+        }
     }
 
     unsafe fn remove_env(key: &str) {
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
     }
 
     #[test]
@@ -317,7 +329,9 @@ mod tests {
         }
 
         let sampler = sampler_from_env().expect("should parse env");
-        assert!(matches!(sampler, TraceSampler::TraceIdRatio(r) if (r - 0.42).abs() < f64::EPSILON));
+        assert!(
+            matches!(sampler, TraceSampler::TraceIdRatio(r) if (r - 0.42).abs() < f64::EPSILON)
+        );
 
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
@@ -327,7 +341,9 @@ mod tests {
 
     #[test]
     fn sampler_from_env_returns_none_when_unset() {
-        unsafe { remove_env("OTEL_TRACES_SAMPLER"); }
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
         assert!(sampler_from_env().is_none());
     }
 
@@ -339,7 +355,9 @@ mod tests {
         }
 
         let sampler = sampler_from_env().expect("should parse env");
-        assert!(matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::TraceIdRatio(r) if (r - 0.1).abs() < f64::EPSILON)));
+        assert!(
+            matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::TraceIdRatio(r) if (r - 0.1).abs() < f64::EPSILON))
+        );
 
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
@@ -349,17 +367,48 @@ mod tests {
 
     #[test]
     fn sampler_from_env_always_on() {
-        unsafe { set_env("OTEL_TRACES_SAMPLER", "always_on"); }
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "always_on");
+        }
         let sampler = sampler_from_env().expect("should parse env");
         assert!(matches!(sampler, TraceSampler::AlwaysOn));
-        unsafe { remove_env("OTEL_TRACES_SAMPLER"); }
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
     }
 
     #[test]
     fn sampler_from_env_always_off() {
-        unsafe { set_env("OTEL_TRACES_SAMPLER", "always_off"); }
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "always_off");
+        }
         let sampler = sampler_from_env().expect("should parse env");
         assert!(matches!(sampler, TraceSampler::AlwaysOff));
-        unsafe { remove_env("OTEL_TRACES_SAMPLER"); }
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
+    }
+
+    #[test]
+    fn sampler_from_env_unknown_returns_none() {
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "unknown_sampler");
+        }
+        assert!(sampler_from_env().is_none());
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
+    }
+
+    #[test]
+    fn trace_sampler_always_on_converts_to_sdk() {
+        let sdk = TraceSampler::AlwaysOn.into_sdk_sampler();
+        assert_eq!(format!("{sdk:?}"), "AlwaysOn");
+    }
+
+    #[test]
+    fn trace_sampler_always_off_converts_to_sdk() {
+        let sdk = TraceSampler::AlwaysOff.into_sdk_sampler();
+        assert_eq!(format!("{sdk:?}"), "AlwaysOff");
     }
 }
