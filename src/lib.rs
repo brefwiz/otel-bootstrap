@@ -1,13 +1,17 @@
-//! One-call OpenTelemetry bootstrap — traces + metrics + logs with OTLP gRPC export.
+//! One-call OpenTelemetry bootstrap — traces + metrics + logs with OTLP export.
 //!
 //! Call [`init_telemetry`] at `main()` before starting the server. Keep the returned
 //! [`TelemetryHandles`] alive for the duration of the process — dropping them flushes
 //! and shuts down both providers.
 //!
 //! Configuration is via environment variables per the OpenTelemetry spec:
-//! - `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317`)
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317` for gRPC, `http://localhost:4318` for HTTP)
+//! - `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc` or `http/protobuf`) — selects transport when both features are enabled
 //! - `OTEL_SERVICE_NAME` (overridden by the `service_name` argument)
 //! - `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` (fallback when no explicit sampler is set)
+
+#[cfg(not(any(feature = "grpc", feature = "http")))]
+compile_error!("at least one transport feature must be enabled: `grpc` or `http`");
 
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
@@ -117,6 +121,37 @@ impl TelemetryHandles {
     }
 }
 
+/// OTLP export protocol.
+///
+/// Selects between gRPC/tonic and HTTP/protobuf transports. When not set
+/// explicitly, the builder reads `OTEL_EXPORTER_OTLP_PROTOCOL`. If both the
+/// `grpc` and `http` features are compiled in and neither the builder nor the
+/// env var specifies a protocol, `grpc` is used.
+///
+/// Each variant is only present when its corresponding feature is enabled, so
+/// match expressions are always exhaustive without a fallback arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportProtocol {
+    /// gRPC via tonic (requires the `grpc` feature).
+    #[cfg(feature = "grpc")]
+    Grpc,
+    /// HTTP/protobuf (requires the `http` feature).
+    #[cfg(feature = "http")]
+    HttpProtobuf,
+}
+
+/// Resolve the export protocol from `OTEL_EXPORTER_OTLP_PROTOCOL`.
+fn protocol_from_env() -> Option<ExportProtocol> {
+    let val = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok()?;
+    match val.trim() {
+        #[cfg(feature = "grpc")]
+        "grpc" => Some(ExportProtocol::Grpc),
+        #[cfg(feature = "http")]
+        "http/protobuf" => Some(ExportProtocol::HttpProtobuf),
+        _ => None,
+    }
+}
+
 /// Entry point for configuring telemetry via a builder pattern.
 ///
 /// # Example
@@ -144,6 +179,7 @@ impl Telemetry {
             sampler: None,
             metrics: true,
             logs: false,
+            protocol: None,
         }
     }
 }
@@ -160,6 +196,7 @@ pub struct TelemetryBuilder {
     sampler: Option<TraceSampler>,
     metrics: bool,
     logs: bool,
+    protocol: Option<ExportProtocol>,
 }
 
 impl TelemetryBuilder {
@@ -188,6 +225,14 @@ impl TelemetryBuilder {
         self
     }
 
+    /// Set the export protocol explicitly. If not set, falls back to
+    /// `OTEL_EXPORTER_OTLP_PROTOCOL`, then the compiled-in default (`grpc`
+    /// when the `grpc` feature is enabled, `http/protobuf` otherwise).
+    pub fn with_protocol(mut self, protocol: ExportProtocol) -> Self {
+        self.protocol = Some(protocol);
+        self
+    }
+
     /// Enable or disable log export via the OTLP log bridge (default: `false`).
     ///
     /// When enabled, `tracing` events are forwarded to an OTLP `LogExporter`
@@ -201,8 +246,25 @@ impl TelemetryBuilder {
 
     /// Consume the builder and initialise OpenTelemetry.
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
+        let protocol = self.protocol.or_else(protocol_from_env).unwrap_or({
+            #[cfg(feature = "grpc")]
+            {
+                ExportProtocol::Grpc
+            }
+            #[cfg(all(not(feature = "grpc"), feature = "http"))]
+            {
+                ExportProtocol::HttpProtobuf
+            }
+        });
+
+        let default_endpoint = match protocol {
+            #[cfg(feature = "grpc")]
+            ExportProtocol::Grpc => "http://localhost:4317",
+            #[cfg(feature = "http")]
+            ExportProtocol::HttpProtobuf => "http://localhost:4318",
+        };
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| "http://localhost:4317".to_string());
+            .unwrap_or_else(|_| default_endpoint.to_string());
 
         let resource = build_resource(
             &self.service_name,
@@ -216,10 +278,7 @@ impl TelemetryBuilder {
             .unwrap_or(TraceSampler::AlwaysOn);
 
         // Tracer
-        let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(&endpoint)
-            .build()?;
+        let trace_exporter = build_span_exporter(protocol, &endpoint)?;
 
         let tracer_provider = SdkTracerProvider::builder()
             .with_resource(resource.clone())
@@ -238,10 +297,7 @@ impl TelemetryBuilder {
 
         // Meter (optional)
         let meter_provider = if self.metrics {
-            let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(&endpoint)
-                .build()?;
+            let metric_exporter = build_metric_exporter(protocol, &endpoint)?;
 
             let mp = SdkMeterProvider::builder()
                 .with_resource(resource.clone())
@@ -257,10 +313,7 @@ impl TelemetryBuilder {
 
         // Logger (optional) — bridges tracing events to the OTLP log pipeline
         let logger_provider = if self.logs {
-            let log_exporter = opentelemetry_otlp::LogExporter::builder()
-                .with_tonic()
-                .with_endpoint(&endpoint)
-                .build()?;
+            let log_exporter = build_log_exporter(protocol, &endpoint)?;
 
             let lp = SdkLoggerProvider::builder()
                 .with_resource(resource)
@@ -339,6 +392,60 @@ pub fn init_telemetry_with_sampler(
         builder = builder.with_sampler(s);
     }
     builder.init()
+}
+
+fn build_span_exporter(
+    protocol: ExportProtocol,
+    endpoint: &str,
+) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error>> {
+    match protocol {
+        #[cfg(feature = "grpc")]
+        ExportProtocol::Grpc => Ok(opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()?),
+        #[cfg(feature = "http")]
+        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_endpoint(endpoint)
+            .build()?),
+    }
+}
+
+fn build_metric_exporter(
+    protocol: ExportProtocol,
+    endpoint: &str,
+) -> Result<opentelemetry_otlp::MetricExporter, Box<dyn Error>> {
+    match protocol {
+        #[cfg(feature = "grpc")]
+        ExportProtocol::Grpc => Ok(opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()?),
+        #[cfg(feature = "http")]
+        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_endpoint(endpoint)
+            .build()?),
+    }
+}
+
+fn build_log_exporter(
+    protocol: ExportProtocol,
+    endpoint: &str,
+) -> Result<opentelemetry_otlp::LogExporter, Box<dyn Error>> {
+    match protocol {
+        #[cfg(feature = "grpc")]
+        ExportProtocol::Grpc => Ok(opentelemetry_otlp::LogExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()?),
+        #[cfg(feature = "http")]
+        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::LogExporter::builder()
+            .with_http()
+            .with_endpoint(endpoint)
+            .build()?),
+    }
 }
 
 /// Build a [`Resource`] enriched with semantic-convention attributes.
@@ -503,6 +610,34 @@ mod tests {
     }
 
     #[test]
+    fn sampler_from_env_parentbased_always_on() {
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "parentbased_always_on");
+        }
+        let sampler = sampler_from_env().expect("should parse env");
+        assert!(
+            matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::AlwaysOn))
+        );
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
+    }
+
+    #[test]
+    fn sampler_from_env_parentbased_always_off() {
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "parentbased_always_off");
+        }
+        let sampler = sampler_from_env().expect("should parse env");
+        assert!(
+            matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::AlwaysOff))
+        );
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
+    }
+
+    #[test]
     fn sampler_from_env_always_on() {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "always_on");
@@ -558,6 +693,7 @@ mod tests {
         assert!(builder.sampler.is_none());
         assert!(builder.metrics);
         assert!(!builder.logs);
+        assert!(builder.protocol.is_none());
     }
 
     #[test]
@@ -578,6 +714,63 @@ mod tests {
             matches!(builder.sampler, Some(TraceSampler::TraceIdRatio(r)) if (r - 0.5).abs() < f64::EPSILON)
         );
         assert!(!builder.metrics);
+    }
+
+    #[test]
+    #[cfg(feature = "grpc")]
+    fn builder_with_protocol_grpc() {
+        let builder = Telemetry::builder("test-svc").with_protocol(ExportProtocol::Grpc);
+        assert_eq!(builder.protocol, Some(ExportProtocol::Grpc));
+    }
+
+    #[test]
+    #[cfg(feature = "http")]
+    fn builder_with_protocol_http() {
+        let builder = Telemetry::builder("test-svc").with_protocol(ExportProtocol::HttpProtobuf);
+        assert_eq!(builder.protocol, Some(ExportProtocol::HttpProtobuf));
+    }
+
+    #[test]
+    #[cfg(feature = "grpc")]
+    fn protocol_from_env_reads_grpc() {
+        unsafe {
+            set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
+        }
+        assert_eq!(protocol_from_env(), Some(ExportProtocol::Grpc));
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_PROTOCOL");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "http")]
+    fn protocol_from_env_reads_http_protobuf() {
+        unsafe {
+            set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
+        }
+        assert_eq!(protocol_from_env(), Some(ExportProtocol::HttpProtobuf));
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_PROTOCOL");
+        }
+    }
+
+    #[test]
+    fn protocol_from_env_returns_none_when_unset() {
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_PROTOCOL");
+        }
+        assert_eq!(protocol_from_env(), None);
+    }
+
+    #[test]
+    fn protocol_from_env_returns_none_for_unknown() {
+        unsafe {
+            set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "websocket");
+        }
+        assert_eq!(protocol_from_env(), None);
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_PROTOCOL");
+        }
     }
 
     #[test]
