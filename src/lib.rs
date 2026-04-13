@@ -88,13 +88,13 @@ fn sampler_from_env() -> Option<TraceSampler> {
     })
 }
 
-/// Handles returned by [`init_telemetry`].
+/// Handles returned by [`init_telemetry`] or [`TelemetryBuilder::init`].
 ///
 /// Keep alive for the duration of the process. Call [`shutdown`](TelemetryHandles::shutdown)
 /// before exiting to flush pending spans and metrics.
 pub struct TelemetryHandles {
     pub tracer_provider: SdkTracerProvider,
-    pub meter_provider: SdkMeterProvider,
+    pub meter_provider: Option<SdkMeterProvider>,
 }
 
 impl TelemetryHandles {
@@ -105,15 +105,156 @@ impl TelemetryHandles {
     /// times — subsequent calls are no-ops.
     pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
         self.tracer_provider.shutdown()?;
-        self.meter_provider.shutdown()?;
+        if let Some(mp) = &self.meter_provider {
+            mp.shutdown()?;
+        }
         Ok(())
+    }
+}
+
+/// Entry point for configuring telemetry via a builder pattern.
+///
+/// # Example
+/// ```no_run
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+///     .with_version("1.0.0")
+///     .with_environment("production")
+///     .with_sampler(otel_bootstrap::TraceSampler::TraceIdRatio(0.1))
+///     .with_metrics(true)
+///     .init()?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct Telemetry;
+
+impl Telemetry {
+    /// Create a new [`TelemetryBuilder`] with the given service name.
+    pub fn builder(service_name: &str) -> TelemetryBuilder {
+        TelemetryBuilder {
+            service_name: service_name.to_string(),
+            service_version: None,
+            deployment_environment: None,
+            sampler: None,
+            metrics: true,
+        }
+    }
+}
+
+/// Builder for configuring telemetry options incrementally.
+///
+/// Created via [`Telemetry::builder`]. Call [`.init()`](TelemetryBuilder::init)
+/// to consume the builder and start telemetry.
+#[must_use = "a TelemetryBuilder does nothing until .init() is called"]
+pub struct TelemetryBuilder {
+    service_name: String,
+    service_version: Option<String>,
+    deployment_environment: Option<String>,
+    sampler: Option<TraceSampler>,
+    metrics: bool,
+}
+
+impl TelemetryBuilder {
+    /// Set the service version (maps to `service.version` resource attribute).
+    pub fn with_version(mut self, version: &str) -> Self {
+        self.service_version = Some(version.to_string());
+        self
+    }
+
+    /// Set the deployment environment (maps to `deployment.environment.name`).
+    pub fn with_environment(mut self, environment: &str) -> Self {
+        self.deployment_environment = Some(environment.to_string());
+        self
+    }
+
+    /// Set an explicit trace sampler. If not set, falls back to
+    /// `OTEL_TRACES_SAMPLER` env var, then always-on.
+    pub fn with_sampler(mut self, sampler: TraceSampler) -> Self {
+        self.sampler = Some(sampler);
+        self
+    }
+
+    /// Enable or disable metrics export (default: `true`).
+    pub fn with_metrics(mut self, enabled: bool) -> Self {
+        self.metrics = enabled;
+        self
+    }
+
+    /// Consume the builder and initialise OpenTelemetry.
+    pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
+        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:4317".to_string());
+
+        let resource = build_resource(
+            &self.service_name,
+            self.service_version.as_deref(),
+            self.deployment_environment.as_deref(),
+        );
+
+        let sampler = self
+            .sampler
+            .or_else(sampler_from_env)
+            .unwrap_or(TraceSampler::AlwaysOn);
+
+        // Tracer
+        let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(&endpoint)
+            .build()?;
+
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_resource(resource.clone())
+            .with_sampler(sampler.into_sdk_sampler())
+            .with_batch_exporter(trace_exporter)
+            .build();
+
+        opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+        // Register W3C TraceContext + Baggage propagators
+        let propagator = TextMapCompositePropagator::new(vec![
+            Box::new(TraceContextPropagator::new()),
+            Box::new(BaggagePropagator::new()),
+        ]);
+        opentelemetry::global::set_text_map_propagator(propagator);
+
+        // Meter (optional)
+        let meter_provider = if self.metrics {
+            let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .with_endpoint(&endpoint)
+                .build()?;
+
+            Some(
+                SdkMeterProvider::builder()
+                    .with_resource(resource)
+                    .with_periodic_exporter(metric_exporter)
+                    .build(),
+            )
+        } else {
+            None
+        };
+
+        // Wire into tracing
+        let otel_layer = tracing_opentelemetry::layer();
+
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(tracing_subscriber::fmt::layer())
+            .with(otel_layer)
+            .try_init()
+            .ok();
+
+        Ok(TelemetryHandles {
+            tracer_provider,
+            meter_provider,
+        })
     }
 }
 
 /// Initialise OpenTelemetry traces + metrics with OTLP gRPC export.
 ///
-/// Uses the default sampler (always-on), unless `OTEL_TRACES_SAMPLER` is set.
-/// For explicit sampler control, use [`init_telemetry_with_sampler`].
+/// Convenience wrapper around [`Telemetry::builder`] with all defaults.
+/// For fine-grained control, use the builder directly.
 ///
 /// # Example
 /// ```no_run
@@ -124,14 +265,15 @@ impl TelemetryHandles {
 /// # }
 /// ```
 pub fn init_telemetry(service_name: &str) -> Result<TelemetryHandles, Box<dyn Error>> {
-    init_telemetry_with_sampler(service_name, None)
+    Telemetry::builder(service_name).init()
 }
 
 /// Initialise OpenTelemetry traces + metrics with OTLP gRPC export and an
 /// explicit trace sampler.
 ///
-/// When `sampler` is `None`, the function checks `OTEL_TRACES_SAMPLER` /
-/// `OTEL_TRACES_SAMPLER_ARG` and falls back to always-on.
+/// Convenience wrapper around [`Telemetry::builder`]. When `sampler` is
+/// `None`, falls back to `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`,
+/// then always-on.
 ///
 /// # Example
 /// ```no_run
@@ -146,62 +288,11 @@ pub fn init_telemetry_with_sampler(
     service_name: &str,
     sampler: Option<TraceSampler>,
 ) -> Result<TelemetryHandles, Box<dyn Error>> {
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:4317".to_string());
-
-    let resource = build_resource(service_name, None, None);
-
-    let sampler = sampler
-        .or_else(sampler_from_env)
-        .unwrap_or(TraceSampler::AlwaysOn);
-
-    // Tracer
-    let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(&endpoint)
-        .build()?;
-
-    let tracer_provider = SdkTracerProvider::builder()
-        .with_resource(resource.clone())
-        .with_sampler(sampler.into_sdk_sampler())
-        .with_batch_exporter(trace_exporter)
-        .build();
-
-    // Register as global so tracing-opentelemetry's layer() picks it up
-    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
-
-    // Register W3C TraceContext + Baggage propagators for distributed tracing
-    let propagator = TextMapCompositePropagator::new(vec![
-        Box::new(TraceContextPropagator::new()),
-        Box::new(BaggagePropagator::new()),
-    ]);
-    opentelemetry::global::set_text_map_propagator(propagator);
-
-    // Meter
-    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(&endpoint)
-        .build()?;
-
-    let meter_provider = SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_periodic_exporter(metric_exporter)
-        .build();
-
-    // Wire into tracing — layer() uses global tracer provider
-    let otel_layer = tracing_opentelemetry::layer();
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .with(otel_layer)
-        .try_init()
-        .ok(); // Ignore if already initialised
-
-    Ok(TelemetryHandles {
-        tracer_provider,
-        meter_provider,
-    })
+    let mut builder = Telemetry::builder(service_name);
+    if let Some(s) = sampler {
+        builder = builder.with_sampler(s);
+    }
+    builder.init()
 }
 
 /// Build a [`Resource`] enriched with semantic-convention attributes.
@@ -410,5 +501,39 @@ mod tests {
     fn trace_sampler_always_off_converts_to_sdk() {
         let sdk = TraceSampler::AlwaysOff.into_sdk_sampler();
         assert_eq!(format!("{sdk:?}"), "AlwaysOff");
+    }
+
+    #[test]
+    fn builder_has_sensible_defaults() {
+        let builder = Telemetry::builder("test-svc");
+        assert_eq!(builder.service_name, "test-svc");
+        assert!(builder.service_version.is_none());
+        assert!(builder.deployment_environment.is_none());
+        assert!(builder.sampler.is_none());
+        assert!(builder.metrics);
+    }
+
+    #[test]
+    fn builder_with_custom_values() {
+        let builder = Telemetry::builder("test-svc")
+            .with_version("2.0.0")
+            .with_environment("production")
+            .with_sampler(TraceSampler::TraceIdRatio(0.5))
+            .with_metrics(false);
+
+        assert_eq!(builder.service_name, "test-svc");
+        assert_eq!(builder.service_version.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            builder.deployment_environment.as_deref(),
+            Some("production")
+        );
+        assert!(matches!(builder.sampler, Some(TraceSampler::TraceIdRatio(r)) if (r - 0.5).abs() < f64::EPSILON));
+        assert!(!builder.metrics);
+    }
+
+    #[test]
+    fn builder_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TelemetryBuilder>();
     }
 }
