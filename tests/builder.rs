@@ -17,7 +17,11 @@ struct EventCapture {
 }
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for EventCapture {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         self.events.lock().unwrap().push(event.metadata().name());
     }
 }
@@ -158,7 +162,9 @@ async fn with_layer_builder_accepts_custom_layer() {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let handles = Telemetry::builder("custom-layer-single")
         .with_metrics(false)
-        .with_layer(EventCapture { events: Arc::clone(&captured) })
+        .with_layer(EventCapture {
+            events: Arc::clone(&captured),
+        })
         .init()
         .expect("init with custom layer should succeed");
     let _ = handles.shutdown();
@@ -168,8 +174,12 @@ async fn with_layer_builder_accepts_custom_layer() {
 async fn with_layer_builder_accepts_multiple_custom_layers() {
     let handles = Telemetry::builder("custom-layer-multi")
         .with_metrics(false)
-        .with_layer(EventCapture { events: Arc::new(Mutex::new(Vec::new())) })
-        .with_layer(EventCapture { events: Arc::new(Mutex::new(Vec::new())) })
+        .with_layer(EventCapture {
+            events: Arc::new(Mutex::new(Vec::new())),
+        })
+        .with_layer(EventCapture {
+            events: Arc::new(Mutex::new(Vec::new())),
+        })
         .init()
         .expect("init with multiple custom layers should succeed");
     let _ = handles.shutdown();
@@ -182,10 +192,12 @@ fn with_layer_single_custom_layer_receives_events() {
     use tracing_subscriber::layer::SubscriberExt;
 
     let captured = Arc::new(Mutex::new(Vec::new()));
-    let layer = EventCapture { events: Arc::clone(&captured) };
+    let layer = EventCapture {
+        events: Arc::clone(&captured),
+    };
 
     let subscriber = tracing_subscriber::registry().with(vec![
-        Box::new(layer) as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+        Box::new(layer) as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>
     ]);
 
     tracing::subscriber::with_default(subscriber, || {
@@ -209,10 +221,12 @@ fn with_layer_multiple_custom_layers_all_receive_events() {
     let captured_b = Arc::new(Mutex::new(Vec::new()));
 
     let subscriber = tracing_subscriber::registry().with(vec![
-        Box::new(EventCapture { events: Arc::clone(&captured_a) })
-            as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
-        Box::new(EventCapture { events: Arc::clone(&captured_b) })
-            as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+        Box::new(EventCapture {
+            events: Arc::clone(&captured_a),
+        }) as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+        Box::new(EventCapture {
+            events: Arc::clone(&captured_b),
+        }) as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
     ]);
 
     tracing::subscriber::with_default(subscriber, || {
@@ -221,6 +235,12 @@ fn with_layer_multiple_custom_layers_all_receive_events() {
 
     let a = captured_a.lock().unwrap();
     let b = captured_b.lock().unwrap();
-    assert!(!a.is_empty(), "first custom layer should have received events");
-    assert!(!b.is_empty(), "second custom layer should have received events");
+    assert!(
+        !a.is_empty(),
+        "first custom layer should have received events"
+    );
+    assert!(
+        !b.is_empty(),
+        "second custom layer should have received events"
+    );
 }
