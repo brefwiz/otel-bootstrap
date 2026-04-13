@@ -260,6 +260,7 @@ impl Telemetry {
             metric_export_interval: None,
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            extra_layers: Vec::new(),
         }
     }
 
@@ -279,6 +280,7 @@ impl Telemetry {
             metric_export_interval: None,
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            extra_layers: Vec::new(),
         }
     }
 }
@@ -300,6 +302,9 @@ pub struct TelemetryBuilder {
     metric_export_interval: Option<Duration>,
     export_timeout: Option<Duration>,
     shutdown_timeout: Duration,
+    extra_layers: Vec<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
+    >,
 }
 
 impl TelemetryBuilder {
@@ -381,6 +386,37 @@ impl TelemetryBuilder {
     /// the providers may not have flushed all pending data.
     pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout;
+        self
+    }
+
+    /// Add a custom [`tracing_subscriber::Layer`] to the subscriber stack.
+    ///
+    /// Multiple layers can be added by chaining calls. Each layer is composed
+    /// with the built-in `EnvFilter`, `fmt`, and OpenTelemetry layers.
+    ///
+    /// Insertion order in the subscriber stack (inner → outer, i.e. first-added
+    /// to last-added):
+    /// ```text
+    /// registry → custom layers → EnvFilter → fmt → OTel
+    /// ```
+    /// Because `EnvFilter` is outer, it can suppress events before they reach
+    /// the `fmt` and OTel layers; custom layers receive events independently
+    /// according to their own `enabled()` implementation.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+    ///     .with_layer(tracing_subscriber::fmt::layer().with_target(false))
+    ///     .init()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_layer<L>(mut self, layer: L) -> Self
+    where
+        L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    {
+        self.extra_layers.push(Box::new(layer));
         self
     }
 
@@ -503,6 +539,7 @@ impl TelemetryBuilder {
         let otel_layer = tracing_opentelemetry::layer();
 
         let registry = tracing_subscriber::registry()
+            .with(self.extra_layers)
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .with(tracing_subscriber::fmt::layer())
             .with(otel_layer);

@@ -6,6 +6,21 @@
 #![cfg(feature = "integration-tests")]
 
 use otel_bootstrap::{Telemetry, TraceSampler};
+use std::sync::{Arc, Mutex};
+use tracing::Subscriber;
+use tracing_subscriber::Layer;
+use tracing_subscriber::registry::LookupSpan;
+
+/// A minimal custom layer that records the names of events it receives.
+struct EventCapture {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for EventCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        self.events.lock().unwrap().push(event.metadata().name());
+    }
+}
 
 #[tokio::test]
 async fn builder_with_all_options_produces_valid_handles() {
@@ -134,4 +149,78 @@ async fn with_export_timeout_propagates_to_exporters() {
     assert!(handles.meter_provider.is_some());
     assert!(handles.logger_provider.is_some());
     let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn with_layer_builder_accepts_custom_layer() {
+    // Verifies the API is usable and init() does not fail when a custom layer is
+    // added. Event dispatch is tested separately via with_default below.
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let handles = Telemetry::builder("custom-layer-single")
+        .with_metrics(false)
+        .with_layer(EventCapture { events: Arc::clone(&captured) })
+        .init()
+        .expect("init with custom layer should succeed");
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn with_layer_builder_accepts_multiple_custom_layers() {
+    let handles = Telemetry::builder("custom-layer-multi")
+        .with_metrics(false)
+        .with_layer(EventCapture { events: Arc::new(Mutex::new(Vec::new())) })
+        .with_layer(EventCapture { events: Arc::new(Mutex::new(Vec::new())) })
+        .init()
+        .expect("init with multiple custom layers should succeed");
+    let _ = handles.shutdown();
+}
+
+/// Verify that a single custom layer composed via `registry().with(vec![layer])`
+/// receives events when events are dispatched through the subscriber.
+#[test]
+fn with_layer_single_custom_layer_receives_events() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let layer = EventCapture { events: Arc::clone(&captured) };
+
+    let subscriber = tracing_subscriber::registry().with(vec![
+        Box::new(layer) as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+    ]);
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!("hello from single-layer test");
+    });
+
+    let events = captured.lock().unwrap();
+    assert!(
+        !events.is_empty(),
+        "custom layer should have received at least one event"
+    );
+}
+
+/// Verify that multiple custom layers composed via `registry().with(vec![...])` all
+/// receive events — matching the behaviour of multiple `.with_layer()` calls.
+#[test]
+fn with_layer_multiple_custom_layers_all_receive_events() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let captured_a = Arc::new(Mutex::new(Vec::new()));
+    let captured_b = Arc::new(Mutex::new(Vec::new()));
+
+    let subscriber = tracing_subscriber::registry().with(vec![
+        Box::new(EventCapture { events: Arc::clone(&captured_a) })
+            as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+        Box::new(EventCapture { events: Arc::clone(&captured_b) })
+            as Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>,
+    ]);
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!("hello from multi-layer test");
+    });
+
+    let a = captured_a.lock().unwrap();
+    let b = captured_b.lock().unwrap();
+    assert!(!a.is_empty(), "first custom layer should have received events");
+    assert!(!b.is_empty(), "second custom layer should have received events");
 }
