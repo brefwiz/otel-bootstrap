@@ -224,12 +224,14 @@ impl TelemetryBuilder {
                 .with_endpoint(&endpoint)
                 .build()?;
 
-            Some(
-                SdkMeterProvider::builder()
-                    .with_resource(resource)
-                    .with_periodic_exporter(metric_exporter)
-                    .build(),
-            )
+            let mp = SdkMeterProvider::builder()
+                .with_resource(resource)
+                .with_periodic_exporter(metric_exporter)
+                .build();
+
+            opentelemetry::global::set_meter_provider(mp.clone());
+
+            Some(mp)
         } else {
             None
         };

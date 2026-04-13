@@ -42,3 +42,19 @@ async fn init_telemetry_with_sampler_delegates_to_builder() {
 
     handles.shutdown().expect("shutdown should succeed");
 }
+
+#[tokio::test]
+async fn global_meter_is_functional_after_init() {
+    let handles = Telemetry::builder("global-meter-test")
+        .with_metrics(true)
+        .init()
+        .expect("builder init should succeed");
+
+    // opentelemetry::global::meter() must return a working meter, not a no-op.
+    // Creating a counter and recording a value exercises the global provider.
+    let meter = opentelemetry::global::meter("my-lib");
+    let counter = meter.u64_counter("test.counter").build();
+    counter.add(1, &[]);
+
+    handles.shutdown().expect("shutdown should succeed");
+}
