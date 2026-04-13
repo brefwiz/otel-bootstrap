@@ -12,6 +12,7 @@ grpc = ["opentelemetry-otlp/grpc-tonic"]
 http = ["opentelemetry-otlp/http-proto", "opentelemetry-otlp/reqwest-client"]
 integration-tests = []
 testing = ["opentelemetry_sdk/testing"]
+axum = ["dep:axum", "dep:tower"]
 
 [dependencies]
 opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
@@ -23,6 +24,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing = "0.1"
 opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_experimental"] }
 hostname = "0.4"
+axum = { version = "0.7", optional = true }
+tower = { version = "0.5", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

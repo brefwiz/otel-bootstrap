@@ -29,6 +29,9 @@ compile_error!("at least one transport feature must be enabled: `grpc` or `http`
 #[cfg(feature = "testing")]
 pub mod testing;
 
+#[cfg(feature = "axum")]
+pub mod axum_middleware;
+
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;
@@ -732,6 +735,28 @@ pub fn build_resource(
     }
 
     builder.build()
+}
+
+/// Returns a ready-to-use [`tower::Layer`] that extracts W3C trace context from
+/// incoming HTTP requests, creates a span with standard HTTP semantic-convention
+/// attributes, and injects trace context into response headers.
+///
+/// Requires the `axum` feature flag.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(feature = "axum")]
+/// # {
+/// use axum::Router;
+///
+/// let app: Router = Router::new()
+///     // ... add routes ...
+///     .layer(otel_bootstrap::axum_layer());
+/// # }
+/// ```
+#[cfg(feature = "axum")]
+pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
+    axum_middleware::OtelTraceLayer
 }
 
 #[cfg(test)]
