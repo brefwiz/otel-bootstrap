@@ -186,17 +186,11 @@ impl Drop for TelemetryHandles {
             let _ = tx.send(());
         });
 
-        match rx.recv_timeout(timeout) {
-            Ok(()) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                tracing::warn!(
-                    "telemetry shutdown timed out after {timeout:?}; \
-                     some spans/metrics may not have been exported"
-                );
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::warn!("telemetry shutdown thread panicked before completing");
-            }
+        if rx.recv_timeout(timeout).is_err() {
+            tracing::warn!(
+                "telemetry shutdown did not complete within {timeout:?}; \
+                 some spans/metrics may not have been exported"
+            );
         }
     }
 }
