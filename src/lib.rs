@@ -762,17 +762,16 @@ mod tests {
 
     #[test]
     fn init_rejects_zero_metric_export_interval() {
-        let result = Telemetry::builder("test-svc")
+        let err = Telemetry::builder("test-svc")
             .with_metric_export_interval(Duration::ZERO)
             .with_metrics(false)
-            .init();
-        assert!(result.is_err(), "expected error for zero interval");
-        if let Err(e) = result {
-            assert!(
-                e.to_string().contains("metric_export_interval"),
-                "error message should mention metric_export_interval, got: {e}"
-            );
-        }
+            .init()
+            .err()
+            .expect("expected error for zero interval");
+        assert!(
+            err.to_string().contains("metric_export_interval"),
+            "error message should mention metric_export_interval, got: {err}"
+        );
     }
 
     #[test]
