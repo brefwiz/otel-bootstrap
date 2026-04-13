@@ -107,3 +107,31 @@ async fn global_meter_is_functional_after_init() {
     // The assertion above is what matters: global::meter() returned a working meter.
     let _ = handles.shutdown();
 }
+
+#[tokio::test]
+async fn from_env_reads_otel_service_name() {
+    // Exercises the `self.service_name.unwrap_or_else(...)` branch in `init()`
+    // when `Telemetry::from_env()` is used (service_name is None).
+    unsafe { std::env::set_var("OTEL_SERVICE_NAME", "env-driven-svc") };
+    let handles = otel_bootstrap::Telemetry::from_env()
+        .with_metrics(false)
+        .init()
+        .expect("from_env init should succeed");
+    unsafe { std::env::remove_var("OTEL_SERVICE_NAME") };
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn with_export_timeout_propagates_to_exporters() {
+    // Exercises the `if let Some(t) = timeout { b = b.with_timeout(t); }` branches
+    // in build_span_exporter, build_metric_exporter, and build_log_exporter.
+    let handles = otel_bootstrap::Telemetry::builder("timeout-test-svc")
+        .with_export_timeout(std::time::Duration::from_secs(5))
+        .with_metrics(true)
+        .with_logs(true)
+        .init()
+        .expect("init with export timeout should succeed");
+    assert!(handles.meter_provider.is_some());
+    assert!(handles.logger_provider.is_some());
+    let _ = handles.shutdown();
+}

@@ -23,13 +23,13 @@ const TRACES_FILE: &str = "collector-output/traces.jsonl";
 /// Wait for the collector to accept gRPC connections on :4317.
 fn wait_for_collector() {
     use std::net::TcpStream;
-    for _ in 0..30 {
+    for _ in 0..60 {
         if TcpStream::connect("127.0.0.1:4317").is_ok() {
             return;
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    panic!("collector not accepting connections on :4317 within 15 seconds");
+    panic!("collector not accepting connections on :4317 within 30 seconds");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

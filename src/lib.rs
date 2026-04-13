@@ -7,8 +7,21 @@
 //! Configuration is via environment variables per the OpenTelemetry spec:
 //! - `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317` for gRPC, `http://localhost:4318` for HTTP)
 //! - `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc` or `http/protobuf`) — selects transport when both features are enabled
+//! - `OTEL_EXPORTER_OTLP_TIMEOUT` — export timeout in milliseconds (default: 10 000 ms)
 //! - `OTEL_SERVICE_NAME` (overridden by the `service_name` argument)
 //! - `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` (fallback when no explicit sampler is set)
+//!
+//! ## Env var handling: otel-bootstrap vs SDK
+//! | Env var | Handled by |
+//! |---------|-----------|
+//! | `OTEL_SERVICE_NAME` | otel-bootstrap (falls back to SDK default) |
+//! | `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | otel-bootstrap |
+//! | `OTEL_EXPORTER_OTLP_PROTOCOL` | otel-bootstrap |
+//! | `OTEL_EXPORTER_OTLP_ENDPOINT` | otel-bootstrap |
+//! | `OTEL_EXPORTER_OTLP_TIMEOUT` | otel-bootstrap |
+//! | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | SDK (batch span processor) |
+//! | `OTEL_METRIC_EXPORT_INTERVAL` | SDK (periodic reader) |
+//! | Per-signal endpoints (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` etc.) | SDK |
 
 #[cfg(not(any(feature = "grpc", feature = "http")))]
 compile_error!("at least one transport feature must be enabled: `grpc` or `http`");
@@ -68,11 +81,19 @@ impl TraceSampler {
 }
 
 /// Resolve the sampler from `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`
-/// environment variables. Returns `None` when the variable is unset.
-fn sampler_from_env() -> Option<TraceSampler> {
-    let name = std::env::var("OTEL_TRACES_SAMPLER").ok()?;
+/// environment variables.
+///
+/// Returns:
+/// - `Ok(None)` when `OTEL_TRACES_SAMPLER` is unset.
+/// - `Ok(Some(_))` for a recognised sampler name.
+/// - `Err(_)` for an unrecognised sampler name (clear error at init time).
+fn sampler_from_env() -> Result<Option<TraceSampler>, Box<dyn Error>> {
+    let name = match std::env::var("OTEL_TRACES_SAMPLER") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
     let arg = std::env::var("OTEL_TRACES_SAMPLER_ARG").ok();
-    Some(match name.as_str() {
+    let sampler = match name.as_str() {
         "always_on" => TraceSampler::AlwaysOn,
         "always_off" => TraceSampler::AlwaysOff,
         "traceidratio" => {
@@ -93,8 +114,16 @@ fn sampler_from_env() -> Option<TraceSampler> {
                 .unwrap_or(1.0);
             TraceSampler::ParentBased(Box::new(TraceSampler::TraceIdRatio(ratio)))
         }
-        _ => return None,
-    })
+        unknown => {
+            return Err(format!(
+                "OTEL_TRACES_SAMPLER: unrecognised sampler name '{unknown}'. \
+                 Valid values: always_on, always_off, traceidratio, \
+                 parentbased_always_on, parentbased_always_off, parentbased_traceidratio"
+            )
+            .into());
+        }
+    };
+    Ok(Some(sampler))
 }
 
 /// Handles returned by [`init_telemetry`] or [`TelemetryBuilder::init`].
@@ -175,9 +204,11 @@ pub struct Telemetry;
 
 impl Telemetry {
     /// Create a new [`TelemetryBuilder`] with the given service name.
+    ///
+    /// The explicit `service_name` takes precedence over `OTEL_SERVICE_NAME`.
     pub fn builder(service_name: &str) -> TelemetryBuilder {
         TelemetryBuilder {
-            service_name: service_name.to_string(),
+            service_name: Some(service_name.to_string()),
             service_version: None,
             deployment_environment: None,
             sampler: None,
@@ -186,17 +217,36 @@ impl Telemetry {
             protocol: None,
             max_export_batch_size: None,
             metric_export_interval: None,
+            export_timeout: None,
+        }
+    }
+
+    /// Create a new [`TelemetryBuilder`] that reads the service name from
+    /// `OTEL_SERVICE_NAME`. Falls back to `"unknown_service"` when the env var
+    /// is not set, following the OpenTelemetry default resource specification.
+    pub fn from_env() -> TelemetryBuilder {
+        TelemetryBuilder {
+            service_name: None,
+            service_version: None,
+            deployment_environment: None,
+            sampler: None,
+            metrics: true,
+            logs: false,
+            protocol: None,
+            max_export_batch_size: None,
+            metric_export_interval: None,
+            export_timeout: None,
         }
     }
 }
 
 /// Builder for configuring telemetry options incrementally.
 ///
-/// Created via [`Telemetry::builder`]. Call [`.init()`](TelemetryBuilder::init)
-/// to consume the builder and start telemetry.
+/// Created via [`Telemetry::builder`] or [`Telemetry::from_env`]. Call
+/// [`.init()`](TelemetryBuilder::init) to consume the builder and start telemetry.
 #[must_use = "a TelemetryBuilder does nothing until .init() is called"]
 pub struct TelemetryBuilder {
-    service_name: String,
+    service_name: Option<String>,
     service_version: Option<String>,
     deployment_environment: Option<String>,
     sampler: Option<TraceSampler>,
@@ -205,6 +255,7 @@ pub struct TelemetryBuilder {
     protocol: Option<ExportProtocol>,
     max_export_batch_size: Option<usize>,
     metric_export_interval: Option<Duration>,
+    export_timeout: Option<Duration>,
 }
 
 impl TelemetryBuilder {
@@ -270,6 +321,14 @@ impl TelemetryBuilder {
         self
     }
 
+    /// Set the OTLP export timeout explicitly. If not set, falls back to
+    /// `OTEL_EXPORTER_OTLP_TIMEOUT` (in milliseconds), then the SDK default
+    /// of 10 000 ms.
+    pub fn with_export_timeout(mut self, timeout: Duration) -> Self {
+        self.export_timeout = Some(timeout);
+        self
+    }
+
     /// Consume the builder and initialise OpenTelemetry.
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
         if let Some(interval) = self.metric_export_interval
@@ -298,19 +357,27 @@ impl TelemetryBuilder {
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
             .unwrap_or_else(|_| default_endpoint.to_string());
 
+        // Resolve export timeout: explicit builder > OTEL_EXPORTER_OTLP_TIMEOUT > SDK default (10 s)
+        let export_timeout = self.export_timeout.or_else(timeout_from_env);
+
+        // Resolve service name: explicit builder > OTEL_SERVICE_NAME > "unknown_service"
+        let service_name = self.service_name.unwrap_or_else(|| {
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "unknown_service".to_string())
+        });
+
         let resource = build_resource(
-            &self.service_name,
+            &service_name,
             self.service_version.as_deref(),
             self.deployment_environment.as_deref(),
         );
 
-        let sampler = self
-            .sampler
-            .or_else(sampler_from_env)
-            .unwrap_or(TraceSampler::AlwaysOn);
+        let sampler = match self.sampler {
+            Some(s) => s,
+            None => sampler_from_env()?.unwrap_or(TraceSampler::AlwaysOn),
+        };
 
         // Tracer
-        let trace_exporter = build_span_exporter(protocol, &endpoint)?;
+        let trace_exporter = build_span_exporter(protocol, &endpoint, export_timeout)?;
 
         let batch_processor = if let Some(size) = self.max_export_batch_size {
             BatchSpanProcessor::builder(trace_exporter)
@@ -341,7 +408,7 @@ impl TelemetryBuilder {
 
         // Meter (optional)
         let meter_provider = if self.metrics {
-            let metric_exporter = build_metric_exporter(protocol, &endpoint)?;
+            let metric_exporter = build_metric_exporter(protocol, &endpoint, export_timeout)?;
 
             let periodic_reader = if let Some(interval) = self.metric_export_interval {
                 PeriodicReader::builder(metric_exporter)
@@ -365,7 +432,7 @@ impl TelemetryBuilder {
 
         // Logger (optional) — bridges tracing events to the OTLP log pipeline
         let logger_provider = if self.logs {
-            let log_exporter = build_log_exporter(protocol, &endpoint)?;
+            let log_exporter = build_log_exporter(protocol, &endpoint, export_timeout)?;
 
             let lp = SdkLoggerProvider::builder()
                 .with_resource(resource)
@@ -447,57 +514,97 @@ pub fn init_telemetry_with_sampler(
     .init()
 }
 
+/// Read `OTEL_EXPORTER_OTLP_TIMEOUT` (milliseconds). Returns `None` when unset or invalid.
+fn timeout_from_env() -> Option<Duration> {
+    let ms = std::env::var("OTEL_EXPORTER_OTLP_TIMEOUT").ok()?;
+    let ms: u64 = ms.trim().parse().ok()?;
+    Some(Duration::from_millis(ms))
+}
+
 fn build_span_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
+    timeout: Option<Duration>,
 ) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
-        ExportProtocol::Grpc => Ok(opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::Grpc => {
+            let mut b = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
         #[cfg(feature = "http")]
-        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::SpanExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::HttpProtobuf => {
+            let mut b = opentelemetry_otlp::SpanExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
     }
 }
 
 fn build_metric_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
+    timeout: Option<Duration>,
 ) -> Result<opentelemetry_otlp::MetricExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
-        ExportProtocol::Grpc => Ok(opentelemetry_otlp::MetricExporter::builder()
-            .with_tonic()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::Grpc => {
+            let mut b = opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
         #[cfg(feature = "http")]
-        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::HttpProtobuf => {
+            let mut b = opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
     }
 }
 
 fn build_log_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
+    timeout: Option<Duration>,
 ) -> Result<opentelemetry_otlp::LogExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
-        ExportProtocol::Grpc => Ok(opentelemetry_otlp::LogExporter::builder()
-            .with_tonic()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::Grpc => {
+            let mut b = opentelemetry_otlp::LogExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
         #[cfg(feature = "http")]
-        ExportProtocol::HttpProtobuf => Ok(opentelemetry_otlp::LogExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .build()?),
+        ExportProtocol::HttpProtobuf => {
+            let mut b = opentelemetry_otlp::LogExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint);
+            if let Some(t) = timeout {
+                b = b.with_timeout(t);
+            }
+            Ok(b.build()?)
+        }
     }
 }
 
@@ -625,7 +732,9 @@ mod tests {
             set_env("OTEL_TRACES_SAMPLER_ARG", "0.42");
         }
 
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(
             matches!(sampler, TraceSampler::TraceIdRatio(r) if (r - 0.42).abs() < f64::EPSILON)
         );
@@ -641,7 +750,7 @@ mod tests {
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
         }
-        assert!(sampler_from_env().is_none());
+        assert!(sampler_from_env().expect("should not error").is_none());
     }
 
     #[test]
@@ -651,7 +760,9 @@ mod tests {
             set_env("OTEL_TRACES_SAMPLER_ARG", "0.1");
         }
 
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(
             matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::TraceIdRatio(r) if (r - 0.1).abs() < f64::EPSILON))
         );
@@ -667,7 +778,9 @@ mod tests {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "parentbased_always_on");
         }
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(
             matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::AlwaysOn))
         );
@@ -681,7 +794,9 @@ mod tests {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "parentbased_always_off");
         }
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(
             matches!(sampler, TraceSampler::ParentBased(inner) if matches!(*inner, TraceSampler::AlwaysOff))
         );
@@ -695,7 +810,9 @@ mod tests {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "always_on");
         }
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(matches!(sampler, TraceSampler::AlwaysOn));
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
@@ -707,7 +824,9 @@ mod tests {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "always_off");
         }
-        let sampler = sampler_from_env().expect("should parse env");
+        let sampler = sampler_from_env()
+            .expect("should not error")
+            .expect("should return Some");
         assert!(matches!(sampler, TraceSampler::AlwaysOff));
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
@@ -715,11 +834,15 @@ mod tests {
     }
 
     #[test]
-    fn sampler_from_env_unknown_returns_none() {
+    fn sampler_from_env_unknown_returns_error() {
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "unknown_sampler");
         }
-        assert!(sampler_from_env().is_none());
+        let err = sampler_from_env().expect_err("unknown sampler should produce an error");
+        assert!(
+            err.to_string().contains("unknown_sampler"),
+            "error message should include the unknown name, got: {err}"
+        );
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
         }
@@ -740,7 +863,7 @@ mod tests {
     #[test]
     fn builder_has_sensible_defaults() {
         let builder = Telemetry::builder("test-svc");
-        assert_eq!(builder.service_name, "test-svc");
+        assert_eq!(builder.service_name.as_deref(), Some("test-svc"));
         assert!(builder.service_version.is_none());
         assert!(builder.deployment_environment.is_none());
         assert!(builder.sampler.is_none());
@@ -749,6 +872,76 @@ mod tests {
         assert!(builder.protocol.is_none());
         assert!(builder.max_export_batch_size.is_none());
         assert!(builder.metric_export_interval.is_none());
+        assert!(builder.export_timeout.is_none());
+    }
+
+    #[test]
+    fn from_env_builder_has_no_service_name() {
+        let builder = Telemetry::from_env();
+        assert!(builder.service_name.is_none());
+    }
+
+    #[test]
+    fn with_export_timeout_stores_value() {
+        let timeout = Duration::from_secs(5);
+        let builder = Telemetry::builder("test-svc").with_export_timeout(timeout);
+        assert_eq!(builder.export_timeout, Some(timeout));
+    }
+
+    #[test]
+    fn timeout_from_env_reads_milliseconds() {
+        unsafe {
+            set_env("OTEL_EXPORTER_OTLP_TIMEOUT", "5000");
+        }
+        let t = timeout_from_env();
+        assert_eq!(t, Some(Duration::from_millis(5000)));
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_TIMEOUT");
+        }
+    }
+
+    #[test]
+    fn timeout_from_env_returns_none_when_unset() {
+        unsafe {
+            remove_env("OTEL_EXPORTER_OTLP_TIMEOUT");
+        }
+        assert_eq!(timeout_from_env(), None);
+    }
+
+    #[test]
+    fn service_name_from_env_used_when_none_given() {
+        let builder = Telemetry::from_env();
+        assert!(builder.service_name.is_none());
+    }
+
+    #[test]
+    fn explicit_service_name_overrides_env_var() {
+        let builder = Telemetry::builder("explicit-svc");
+        assert_eq!(builder.service_name.as_deref(), Some("explicit-svc"));
+    }
+
+    #[test]
+    fn from_env_builder_service_name_is_none() {
+        let builder = Telemetry::from_env();
+        assert!(builder.service_name.is_none());
+    }
+
+    #[test]
+    fn init_returns_error_for_unknown_otel_traces_sampler() {
+        unsafe {
+            set_env("OTEL_TRACES_SAMPLER", "not_a_real_sampler");
+        }
+        let result = Telemetry::builder("test-svc").with_metrics(false).init();
+        let err = result
+            .err()
+            .expect("unknown sampler env var should cause init to fail");
+        assert!(
+            err.to_string().contains("not_a_real_sampler"),
+            "error should name the unknown sampler, got: {err}"
+        );
+        unsafe {
+            remove_env("OTEL_TRACES_SAMPLER");
+        }
     }
 
     #[test]
@@ -786,7 +979,7 @@ mod tests {
             .with_sampler(TraceSampler::TraceIdRatio(0.5))
             .with_metrics(false);
 
-        assert_eq!(builder.service_name, "test-svc");
+        assert_eq!(builder.service_name.as_deref(), Some("test-svc"));
         assert_eq!(builder.service_version.as_deref(), Some("2.0.0"));
         assert_eq!(
             builder.deployment_environment.as_deref(),
