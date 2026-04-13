@@ -19,14 +19,15 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     Resource,
     logs::SdkLoggerProvider,
-    metrics::SdkMeterProvider,
+    metrics::{PeriodicReader, SdkMeterProvider},
     propagation::{BaggagePropagator, TraceContextPropagator},
-    trace::{Sampler, SdkTracerProvider},
+    trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider},
 };
 use opentelemetry_semantic_conventions::attribute::{
     DEPLOYMENT_ENVIRONMENT_NAME, HOST_NAME, PROCESS_PID, SERVICE_VERSION,
 };
 use std::error::Error;
+use std::time::Duration;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -180,6 +181,8 @@ impl Telemetry {
             metrics: true,
             logs: false,
             protocol: None,
+            max_export_batch_size: None,
+            metric_export_interval: None,
         }
     }
 }
@@ -197,6 +200,8 @@ pub struct TelemetryBuilder {
     metrics: bool,
     logs: bool,
     protocol: Option<ExportProtocol>,
+    max_export_batch_size: Option<usize>,
+    metric_export_interval: Option<Duration>,
 }
 
 impl TelemetryBuilder {
@@ -233,6 +238,24 @@ impl TelemetryBuilder {
         self
     }
 
+    /// Set the maximum number of spans exported in a single batch (default: 512).
+    ///
+    /// Overrides `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` when set programmatically.
+    /// The env var is still read as a fallback when this method is not called.
+    pub fn with_max_export_batch_size(mut self, size: usize) -> Self {
+        self.max_export_batch_size = Some(size);
+        self
+    }
+
+    /// Set the interval between metric exports (default: 60 s).
+    ///
+    /// Returns an error at build time if `interval` is zero.
+    /// Overrides `OTEL_METRIC_EXPORT_INTERVAL` when set programmatically.
+    pub fn with_metric_export_interval(mut self, interval: Duration) -> Self {
+        self.metric_export_interval = Some(interval);
+        self
+    }
+
     /// Enable or disable log export via the OTLP log bridge (default: `false`).
     ///
     /// When enabled, `tracing` events are forwarded to an OTLP `LogExporter`
@@ -246,6 +269,12 @@ impl TelemetryBuilder {
 
     /// Consume the builder and initialise OpenTelemetry.
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
+        if let Some(interval) = self.metric_export_interval
+            && interval.is_zero()
+        {
+            return Err("metric_export_interval must be greater than zero".into());
+        }
+
         let protocol = self.protocol.or_else(protocol_from_env).unwrap_or({
             #[cfg(feature = "grpc")]
             {
@@ -280,10 +309,22 @@ impl TelemetryBuilder {
         // Tracer
         let trace_exporter = build_span_exporter(protocol, &endpoint)?;
 
+        let batch_processor = if let Some(size) = self.max_export_batch_size {
+            BatchSpanProcessor::builder(trace_exporter)
+                .with_batch_config(
+                    BatchConfigBuilder::default()
+                        .with_max_export_batch_size(size)
+                        .build(),
+                )
+                .build()
+        } else {
+            BatchSpanProcessor::builder(trace_exporter).build()
+        };
+
         let tracer_provider = SdkTracerProvider::builder()
             .with_resource(resource.clone())
             .with_sampler(sampler.into_sdk_sampler())
-            .with_batch_exporter(trace_exporter)
+            .with_span_processor(batch_processor)
             .build();
 
         opentelemetry::global::set_tracer_provider(tracer_provider.clone());
@@ -299,9 +340,17 @@ impl TelemetryBuilder {
         let meter_provider = if self.metrics {
             let metric_exporter = build_metric_exporter(protocol, &endpoint)?;
 
+            let periodic_reader = if let Some(interval) = self.metric_export_interval {
+                PeriodicReader::builder(metric_exporter)
+                    .with_interval(interval)
+                    .build()
+            } else {
+                PeriodicReader::builder(metric_exporter).build()
+            };
+
             let mp = SdkMeterProvider::builder()
                 .with_resource(resource.clone())
-                .with_periodic_exporter(metric_exporter)
+                .with_reader(periodic_reader)
                 .build();
 
             opentelemetry::global::set_meter_provider(mp.clone());
@@ -694,6 +743,36 @@ mod tests {
         assert!(builder.metrics);
         assert!(!builder.logs);
         assert!(builder.protocol.is_none());
+        assert!(builder.max_export_batch_size.is_none());
+        assert!(builder.metric_export_interval.is_none());
+    }
+
+    #[test]
+    fn with_max_export_batch_size_stores_value() {
+        let builder = Telemetry::builder("test-svc").with_max_export_batch_size(1024);
+        assert_eq!(builder.max_export_batch_size, Some(1024));
+    }
+
+    #[test]
+    fn with_metric_export_interval_stores_value() {
+        let interval = Duration::from_secs(30);
+        let builder = Telemetry::builder("test-svc").with_metric_export_interval(interval);
+        assert_eq!(builder.metric_export_interval, Some(interval));
+    }
+
+    #[test]
+    fn init_rejects_zero_metric_export_interval() {
+        let result = Telemetry::builder("test-svc")
+            .with_metric_export_interval(Duration::ZERO)
+            .with_metrics(false)
+            .init();
+        assert!(result.is_err(), "expected error for zero interval");
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("metric_export_interval"),
+                "error message should mention metric_export_interval, got: {e}"
+            );
+        }
     }
 
     #[test]
