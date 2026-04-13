@@ -527,7 +527,9 @@ mod tests {
             builder.deployment_environment.as_deref(),
             Some("production")
         );
-        assert!(matches!(builder.sampler, Some(TraceSampler::TraceIdRatio(r)) if (r - 0.5).abs() < f64::EPSILON));
+        assert!(
+            matches!(builder.sampler, Some(TraceSampler::TraceIdRatio(r)) if (r - 0.5).abs() < f64::EPSILON)
+        );
         assert!(!builder.metrics);
     }
 
