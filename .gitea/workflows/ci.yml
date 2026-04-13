@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: Code Formatting
+    runs-on: brefwiz
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: make ci-fmt
+
+  clippy:
+    name: Clippy Lints
+    runs-on: brefwiz
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-v1
+          restore-keys: ${{ runner.os }}-cargo-clippy-
+      - name: Run Clippy
+        run: make ci-lint
+
+  audit:
+    name: Security Audit
+    runs-on: brefwiz
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache advisory database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: cargo-advisory-db
+          restore-keys: cargo-advisory-db
+      - name: Cache cargo registry index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry/index
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-index-
+      - name: Update advisory DB from internal mirror
+        run: |
+          if [ ! -d ~/.cargo/advisory-db ]; then
+            git clone --depth=1 https://git.brefwiz.com/RustSec/advisory-db.git ~/.cargo/advisory-db
+          else
+            git -C ~/.cargo/advisory-db pull --ff-only
+          fi
+      - name: Security audit
+        run: cargo audit --db ~/.cargo/advisory-db --no-fetch
+
+  test:
+    name: Unit Tests
+    runs-on: brefwiz
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}-v1
+          restore-keys: ${{ runner.os }}-cargo-test-
+      - name: Run unit tests
+        run: make ci-test
+
+  e2e:
+    name: E2E + Coverage
+    runs-on: brefwiz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Harbor
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USER }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_TOKEN }}
+        run: echo "$HARBOR_TOKEN" | docker login harbor.brefwiz.com -u "$HARBOR_USER" --password-stdin
+
+      # ── Start OTel Collector ──────────────────────────────────────────
+      - name: Start OTel Collector
+        run: |
+          mkdir -p collector-output
+          docker compose up -d
+          echo "Waiting for collector to accept connections..."
+          for i in $(seq 1 30); do
+            if nc -z 127.0.0.1 4317 2>/dev/null; then
+              echo "Collector ready"
+              break
+            fi
+            sleep 1
+          done
+
+      # ── Run coverage (unit + e2e) ────────────────────────────────────
+      - name: "Coverage: unit + e2e (100% gate)"
+        run: |
+          docker run --rm --name otel-coverage \
+            --network host \
+            -v "$PWD:/workspace" -w /workspace \
+            -e CARGO_TERM_COLOR=always \
+            -e RUST_BACKTRACE=1 \
+            ${{ vars.RUST_CI_IMAGE }} \
+            sh -c "make install-nextest install-llvm-cov && make ci-coverage"
+
+      # ── Diagnostics ──────────────────────────────────────────────────
+      - name: Collector diagnostics
+        if: failure()
+        run: |
+          echo "=== Collector logs ==="
+          docker compose logs --tail=100
+          echo ""
+          echo "=== Trace output ==="
+          cat collector-output/traces.jsonl 2>/dev/null || echo "(empty)"
+
+      - name: Upload coverage report
+        if: always()
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        timeout-minutes: 1
+        run: docker compose down 2>/dev/null || true
+
+  # ============================================================================
+  # Publish — gated on all checks, main branch only
+  # ============================================================================
+  publish:
+    name: Publish to Forgejo Registry
+    runs-on: brefwiz
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [fmt, clippy, audit, test, e2e]
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish crate
+        env:
+          CARGO_REGISTRIES_SALINGUE_TOKEN: "Bearer ${{ secrets.PACKAGE_PUBLISHER_TOKEN }}"
+        run: |
+          if ! cargo publish --registry brefwiz --allow-dirty 2>&1 | tee /tmp/publish.log; then
+            if grep -q "already uploaded\|already exists" /tmp/publish.log; then
+              echo "⚠️ otel-bootstrap already published at this version"
+              exit 0
+            else
+              cat /tmp/publish.log; exit 1
+            fi
+          fi
+      - name: Summary
+        if: success()
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "## 📦 otel-bootstrap Published" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** brefwiz" >> $GITHUB_STEP_SUMMARY

@@ -20,21 +20,23 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Handles returned by [`init_telemetry`].
 ///
-/// Must be kept alive for the duration of the process.
-/// On drop, providers are flushed and shut down.
+/// Keep alive for the duration of the process. Call [`shutdown`](TelemetryHandles::shutdown)
+/// before exiting to flush pending spans and metrics.
 pub struct TelemetryHandles {
     pub tracer_provider: SdkTracerProvider,
     pub meter_provider: SdkMeterProvider,
 }
 
-impl Drop for TelemetryHandles {
-    fn drop(&mut self) {
-        if let Err(e) = self.tracer_provider.shutdown() {
-            eprintln!("tracer provider shutdown error: {e}");
-        }
-        if let Err(e) = self.meter_provider.shutdown() {
-            eprintln!("meter provider shutdown error: {e}");
-        }
+impl TelemetryHandles {
+    /// Flush pending data and shut down both providers.
+    ///
+    /// Must be called before the tokio runtime shuts down so the batch
+    /// exporter can send remaining spans over gRPC. Safe to call multiple
+    /// times — subsequent calls are no-ops.
+    pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
+        self.tracer_provider.shutdown()?;
+        self.meter_provider.shutdown()?;
+        Ok(())
     }
 }
 
@@ -126,7 +128,8 @@ pub fn build_resource(
     }
 
     if let Some(env) = deployment_environment {
-        builder = builder.with_attribute(KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, env.to_string()));
+        builder =
+            builder.with_attribute(KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, env.to_string()));
     }
 
     builder.build()
@@ -153,7 +156,11 @@ mod tests {
             Some(opentelemetry::Value::from("staging")),
         );
         assert!(resource.get(&opentelemetry::Key::new(HOST_NAME)).is_some());
-        assert!(resource.get(&opentelemetry::Key::new(PROCESS_PID)).is_some());
+        assert!(
+            resource
+                .get(&opentelemetry::Key::new(PROCESS_PID))
+                .is_some()
+        );
     }
 
     #[test]
@@ -164,10 +171,22 @@ mod tests {
             resource.get(&opentelemetry::Key::new("service.name")),
             Some(opentelemetry::Value::from("test-svc")),
         );
-        assert!(resource.get(&opentelemetry::Key::new(SERVICE_VERSION)).is_none());
-        assert!(resource.get(&opentelemetry::Key::new(DEPLOYMENT_ENVIRONMENT_NAME)).is_none());
+        assert!(
+            resource
+                .get(&opentelemetry::Key::new(SERVICE_VERSION))
+                .is_none()
+        );
+        assert!(
+            resource
+                .get(&opentelemetry::Key::new(DEPLOYMENT_ENVIRONMENT_NAME))
+                .is_none()
+        );
         // Auto-detected attributes still present
         assert!(resource.get(&opentelemetry::Key::new(HOST_NAME)).is_some());
-        assert!(resource.get(&opentelemetry::Key::new(PROCESS_PID)).is_some());
+        assert!(
+            resource
+                .get(&opentelemetry::Key::new(PROCESS_PID))
+                .is_some()
+        );
     }
 }
