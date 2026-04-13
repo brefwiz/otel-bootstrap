@@ -9,8 +9,14 @@
 //! - `OTEL_SERVICE_NAME` (overridden by the `service_name` argument)
 
 use opentelemetry::KeyValue;
+use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{Resource, metrics::SdkMeterProvider, trace::SdkTracerProvider};
+use opentelemetry_sdk::{
+    Resource,
+    metrics::SdkMeterProvider,
+    propagation::{BaggagePropagator, TraceContextPropagator},
+    trace::SdkTracerProvider,
+};
 use opentelemetry_semantic_conventions::attribute::{
     DEPLOYMENT_ENVIRONMENT_NAME, HOST_NAME, PROCESS_PID, SERVICE_VERSION,
 };
@@ -74,6 +80,13 @@ pub fn init_telemetry(service_name: &str) -> Result<TelemetryHandles, Box<dyn Er
 
     // Register as global so tracing-opentelemetry's layer() picks it up
     opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+    // Register W3C TraceContext + Baggage propagators for distributed tracing
+    let propagator = TextMapCompositePropagator::new(vec![
+        Box::new(TraceContextPropagator::new()),
+        Box::new(BaggagePropagator::new()),
+    ]);
+    opentelemetry::global::set_text_map_propagator(propagator);
 
     // Meter
     let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
