@@ -68,6 +68,29 @@ async fn builder_with_logs_disabled_produces_no_logger_provider() {
 }
 
 #[tokio::test]
+async fn builder_with_custom_batch_size_initialises_successfully() {
+    let handles = Telemetry::builder("builder-batch-size-test")
+        .with_max_export_batch_size(1024)
+        .with_metrics(false)
+        .init()
+        .expect("builder init with custom batch size should succeed");
+
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn builder_with_custom_metric_interval_initialises_successfully() {
+    let handles = Telemetry::builder("builder-metric-interval-test")
+        .with_metric_export_interval(std::time::Duration::from_secs(10))
+        .with_metrics(true)
+        .init()
+        .expect("builder init with custom metric interval should succeed");
+
+    assert!(handles.meter_provider.is_some());
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
 async fn global_meter_is_functional_after_init() {
     let handles = Telemetry::builder("global-meter-test")
         .with_metrics(true)
