@@ -16,3 +16,5 @@ opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics", "l
 tracing-opentelemetry = "0.30"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing = "0.1"
+opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_experimental"] }
+hostname = "0.4"
