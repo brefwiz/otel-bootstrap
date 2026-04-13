@@ -10,9 +10,10 @@ repository = "https://git.brefwiz.com/open/otel-bootstrap"
 integration-tests = []
 
 [dependencies]
-opentelemetry = { version = "0.31", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.31", features = ["metrics", "logs", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics", "logs"] }
+opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.30"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing = "0.1"

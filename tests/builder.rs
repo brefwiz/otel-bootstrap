@@ -44,6 +44,30 @@ async fn init_telemetry_with_sampler_delegates_to_builder() {
 }
 
 #[tokio::test]
+async fn builder_with_logs_enabled_produces_logger_provider() {
+    let handles = Telemetry::builder("builder-logs-test")
+        .with_metrics(false)
+        .with_logs(true)
+        .init()
+        .expect("builder init with logs should succeed");
+
+    assert!(handles.logger_provider.is_some());
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn builder_with_logs_disabled_produces_no_logger_provider() {
+    let handles = Telemetry::builder("builder-no-logs")
+        .with_metrics(false)
+        .with_logs(false)
+        .init()
+        .expect("builder init without logs should succeed");
+
+    assert!(handles.logger_provider.is_none());
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
 async fn global_meter_is_functional_after_init() {
     let handles = Telemetry::builder("global-meter-test")
         .with_metrics(true)

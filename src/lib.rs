@@ -1,4 +1,4 @@
-//! One-call OpenTelemetry bootstrap — traces + metrics with OTLP gRPC export.
+//! One-call OpenTelemetry bootstrap — traces + metrics + logs with OTLP gRPC export.
 //!
 //! Call [`init_telemetry`] at `main()` before starting the server. Keep the returned
 //! [`TelemetryHandles`] alive for the duration of the process — dropping them flushes
@@ -14,6 +14,7 @@ use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     Resource,
+    logs::SdkLoggerProvider,
     metrics::SdkMeterProvider,
     propagation::{BaggagePropagator, TraceContextPropagator},
     trace::{Sampler, SdkTracerProvider},
@@ -91,14 +92,15 @@ fn sampler_from_env() -> Option<TraceSampler> {
 /// Handles returned by [`init_telemetry`] or [`TelemetryBuilder::init`].
 ///
 /// Keep alive for the duration of the process. Call [`shutdown`](TelemetryHandles::shutdown)
-/// before exiting to flush pending spans and metrics.
+/// before exiting to flush pending spans, metrics, and logs.
 pub struct TelemetryHandles {
     pub tracer_provider: SdkTracerProvider,
     pub meter_provider: Option<SdkMeterProvider>,
+    pub logger_provider: Option<SdkLoggerProvider>,
 }
 
 impl TelemetryHandles {
-    /// Flush pending data and shut down both providers.
+    /// Flush pending data and shut down all providers.
     ///
     /// Must be called before the tokio runtime shuts down so the batch
     /// exporter can send remaining spans over gRPC. Safe to call multiple
@@ -107,6 +109,9 @@ impl TelemetryHandles {
         self.tracer_provider.shutdown()?;
         if let Some(mp) = &self.meter_provider {
             mp.shutdown()?;
+        }
+        if let Some(lp) = &self.logger_provider {
+            lp.shutdown()?;
         }
         Ok(())
     }
@@ -122,6 +127,7 @@ impl TelemetryHandles {
 ///     .with_environment("production")
 ///     .with_sampler(otel_bootstrap::TraceSampler::TraceIdRatio(0.1))
 ///     .with_metrics(true)
+///     .with_logs(true)
 ///     .init()?;
 /// # Ok(())
 /// # }
@@ -137,6 +143,7 @@ impl Telemetry {
             deployment_environment: None,
             sampler: None,
             metrics: true,
+            logs: false,
         }
     }
 }
@@ -152,6 +159,7 @@ pub struct TelemetryBuilder {
     deployment_environment: Option<String>,
     sampler: Option<TraceSampler>,
     metrics: bool,
+    logs: bool,
 }
 
 impl TelemetryBuilder {
@@ -177,6 +185,17 @@ impl TelemetryBuilder {
     /// Enable or disable metrics export (default: `true`).
     pub fn with_metrics(mut self, enabled: bool) -> Self {
         self.metrics = enabled;
+        self
+    }
+
+    /// Enable or disable log export via the OTLP log bridge (default: `false`).
+    ///
+    /// When enabled, `tracing` events are forwarded to an OTLP `LogExporter`
+    /// in addition to the existing stdout fmt layer. This allows structured
+    /// logs to be correlated with traces in backends like Grafana Loki or
+    /// Datadog.
+    pub fn with_logs(mut self, enabled: bool) -> Self {
+        self.logs = enabled;
         self
     }
 
@@ -225,7 +244,7 @@ impl TelemetryBuilder {
                 .build()?;
 
             let mp = SdkMeterProvider::builder()
-                .with_resource(resource)
+                .with_resource(resource.clone())
                 .with_periodic_exporter(metric_exporter)
                 .build();
 
@@ -236,19 +255,44 @@ impl TelemetryBuilder {
             None
         };
 
+        // Logger (optional) — bridges tracing events to the OTLP log pipeline
+        let logger_provider = if self.logs {
+            let log_exporter = opentelemetry_otlp::LogExporter::builder()
+                .with_tonic()
+                .with_endpoint(&endpoint)
+                .build()?;
+
+            let lp = SdkLoggerProvider::builder()
+                .with_resource(resource)
+                .with_batch_exporter(log_exporter)
+                .build();
+
+            Some(lp)
+        } else {
+            None
+        };
+
         // Wire into tracing
         let otel_layer = tracing_opentelemetry::layer();
 
-        tracing_subscriber::registry()
+        let registry = tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .with(tracing_subscriber::fmt::layer())
-            .with(otel_layer)
-            .try_init()
-            .ok();
+            .with(otel_layer);
+
+        if let Some(lp) = &logger_provider {
+            registry
+                .with(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp))
+                .try_init()
+                .ok();
+        } else {
+            registry.try_init().ok();
+        }
 
         Ok(TelemetryHandles {
             tracer_provider,
             meter_provider,
+            logger_provider,
         })
     }
 }
@@ -513,6 +557,7 @@ mod tests {
         assert!(builder.deployment_environment.is_none());
         assert!(builder.sampler.is_none());
         assert!(builder.metrics);
+        assert!(!builder.logs);
     }
 
     #[test]
