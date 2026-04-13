@@ -1,0 +1,18 @@
+[package]
+name = "otel-bootstrap"
+version = "0.1.0"
+edition = "2024"
+description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP gRPC export"
+license = "LicenseRef-Proprietary"
+repository = "https://git.brefwiz.com/open/otel-bootstrap"
+
+[features]
+integration-tests = []
+
+[dependencies]
+opentelemetry = { version = "0.31", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics", "logs"] }
+tracing-opentelemetry = "0.30"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing = "0.1"
