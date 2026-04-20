@@ -1,3 +1,12 @@
+# CI — consumes brefwiz/ci-workflows composite actions via local checkout.
+#
+# Why the double-checkout: this Gitea instance has "require sign-in to view"
+# enabled, so the runner's auto-issued job token can't git-fetch the
+# ci-workflows repo even though it's public. Each job pre-checks-out
+# ci-workflows with PACKAGE_READER_TOKEN, then `uses: ./.ci-workflows/...`
+# by local path. Composites accept `checkout: false` to avoid re-running
+# checkout on top of our manual one.
+
 name: CI
 
 on:
@@ -19,6 +28,9 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # ==========================================================================
+  # fmt
+  # ==========================================================================
   fmt:
     name: Code Formatting
     runs-on: brefwiz
@@ -27,11 +39,23 @@ jobs:
       credentials:
         username: ${{ secrets.HARBOR_USER }}
         password: ${{ secrets.HARBOR_TOKEN }}
+    env:
+      CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
-      - name: Check formatting
-        run: make ci-fmt
+      - uses: actions/checkout@v4
+        with:
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/fmt
+        with:
+          checkout: "false"
 
+  # ==========================================================================
+  # clippy
+  # ==========================================================================
   clippy:
     name: Clippy Lints
     runs-on: brefwiz
@@ -40,19 +64,23 @@ jobs:
       credentials:
         username: ${{ secrets.HARBOR_USER }}
         password: ${{ secrets.HARBOR_TOKEN }}
+    env:
+      CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-v1
-          restore-keys: ${{ runner.os }}-cargo-clippy-
-      - name: Run Clippy
-        run: make ci-lint
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/clippy
+        with:
+          checkout: "false"
 
+  # ==========================================================================
+  # audit
+  # ==========================================================================
   audit:
     name: Security Audit
     runs-on: brefwiz
@@ -61,30 +89,24 @@ jobs:
       credentials:
         username: ${{ secrets.HARBOR_USER }}
         password: ${{ secrets.HARBOR_TOKEN }}
+    env:
+      CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
-      - name: Cache advisory database
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: ~/.cargo/advisory-db
-          key: cargo-advisory-db
-          restore-keys: cargo-advisory-db
-      - name: Cache cargo registry index
-        uses: actions/cache@v4
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/audit
         with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-index-
-      - name: Update advisory DB from internal mirror
-        run: |
-          if [ ! -d ~/.cargo/advisory-db ]; then
-            git clone --depth=1 https://git.brefwiz.com/RustSec/advisory-db.git ~/.cargo/advisory-db
-          else
-            git -C ~/.cargo/advisory-db pull --ff-only
-          fi
-      - name: Security audit
-        run: cargo audit --db ~/.cargo/advisory-db --no-fetch
+          checkout: "false"
+          policies-token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
 
+  # ==========================================================================
+  # test
+  # ==========================================================================
   test:
     name: Unit Tests
     runs-on: brefwiz
@@ -93,19 +115,28 @@ jobs:
       credentials:
         username: ${{ secrets.HARBOR_USER }}
         password: ${{ secrets.HARBOR_TOKEN }}
+    env:
+      CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}-v1
-          restore-keys: ${{ runner.os }}-cargo-test-
-      - name: Run unit tests
-        run: make ci-test
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/test
+        with:
+          checkout: "false"
 
+  # ==========================================================================
+  # e2e + coverage — unique pattern: OTel Collector spawned on host via
+  # docker compose, coverage invoked inside a sibling container using
+  # --network host to reach the collector. The ci-workflows `coverage`
+  # composite runs in-container which can't orchestrate its own collector,
+  # so this job stays bespoke. Registry token is threaded into the inner
+  # docker invocation explicitly.
+  # ==========================================================================
   e2e:
     name: E2E + Coverage
     runs-on: brefwiz
@@ -118,7 +149,6 @@ jobs:
           HARBOR_TOKEN: ${{ secrets.HARBOR_TOKEN }}
         run: echo "$HARBOR_TOKEN" | docker login harbor.brefwiz.com -u "$HARBOR_USER" --password-stdin
 
-      # ── Start OTel Collector ──────────────────────────────────────────
       - name: Start OTel Collector
         run: |
           mkdir -p collector-output && chmod 777 collector-output
@@ -133,18 +163,19 @@ jobs:
             sleep 1
           done
 
-      # ── Run coverage (unit + e2e) ────────────────────────────────────
       - name: "Coverage: unit + e2e (100% gate)"
+        env:
+          CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
         run: |
           docker run --rm --name otel-coverage \
             --network host \
             -v "$PWD:/workspace" -w /workspace \
             -e CARGO_TERM_COLOR=always \
             -e RUST_BACKTRACE=1 \
+            -e CARGO_REGISTRIES_BREFWIZ_TOKEN="$CARGO_REGISTRIES_BREFWIZ_TOKEN" \
             ${{ vars.RUST_CI_IMAGE }} \
             sh -c "make install-nextest install-llvm-cov && make ci-coverage"
 
-      # ── Diagnostics ──────────────────────────────────────────────────
       - name: Collector diagnostics
         if: failure()
         run: |
@@ -167,9 +198,9 @@ jobs:
         timeout-minutes: 1
         run: docker compose down 2>/dev/null || true
 
-  # ============================================================================
-  # Publish — gated on all checks, main branch only
-  # ============================================================================
+  # ==========================================================================
+  # publish — gated on all checks, main branch only
+  # ==========================================================================
   publish:
     name: Publish to Forgejo Registry
     runs-on: brefwiz

@@ -32,6 +32,9 @@ pub mod testing;
 #[cfg(feature = "axum")]
 pub mod axum_middleware;
 
+#[cfg(feature = "org-context")]
+pub mod span_enrichment;
+
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;
@@ -894,6 +897,40 @@ pub fn build_resource(
 #[cfg(feature = "axum")]
 pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
     axum_middleware::OtelTraceLayer
+}
+
+/// Construct the tower [`Layer`](tower::Layer) that records `enduser.*` span
+/// attributes from an `OrganizationContext` carried in the request extensions.
+///
+/// Requires both the `axum` and `org-context` feature flags.
+///
+/// Place this layer *inside* the [`axum::Extension`] layer that injects
+/// `OrganizationContext`, and outside the handler, so the context is populated
+/// before this service inspects the extensions.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(all(feature = "axum", feature = "org-context"))] {
+/// use axum::{Router, Extension, routing::get};
+/// use api_bones::{OrganizationContext, OrgId, Principal, RequestId};
+/// use uuid::Uuid;
+///
+/// let ctx = OrganizationContext::new(
+///     OrgId::generate(),
+///     Principal::human(Uuid::new_v4()),
+///     RequestId::new(),
+/// );
+///
+/// let app: Router = Router::new()
+///     .route("/", get(|| async { "ok" }))
+///     .layer(otel_bootstrap::org_context_span_enricher_layer())
+///     .layer(Extension(ctx))
+///     .layer(otel_bootstrap::axum_layer());
+/// # }
+/// ```
+#[cfg(all(feature = "axum", feature = "org-context"))]
+pub fn org_context_span_enricher_layer() -> axum_middleware::OrgContextSpanEnricher {
+    axum_middleware::OrgContextSpanEnricher
 }
 
 #[cfg(test)]

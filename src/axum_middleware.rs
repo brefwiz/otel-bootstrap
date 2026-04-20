@@ -119,6 +119,97 @@ where
     }
 }
 
+/// Tower [`Layer`] that records `enduser.*` attributes on the active span from
+/// an [`api_bones::OrganizationContext`] carried in the request extensions.
+///
+/// Intended to sit *inside* the axum [`axum::Extension`] layer that injects
+/// `OrganizationContext`, so the context is present by the time a request
+/// reaches this service.
+///
+/// When the extension is absent (e.g. a platform-scope route that is not
+/// inside the authenticated tenant surface) the service is a no-op and emits
+/// a single `tracing::warn!` the first time the condition is observed.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(all(feature = "axum", feature = "org-context"))] {
+/// use axum::{Router, Extension, routing::get};
+/// use api_bones::{OrganizationContext, OrgId, Principal, RequestId};
+/// use uuid::Uuid;
+///
+/// let ctx = OrganizationContext::new(
+///     OrgId::generate(),
+///     Principal::human(Uuid::new_v4()),
+///     RequestId::new(),
+/// );
+///
+/// let app: Router = Router::new()
+///     .route("/", get(|| async { "ok" }))
+///     .layer(otel_bootstrap::org_context_span_enricher_layer())
+///     .layer(Extension(ctx))
+///     .layer(otel_bootstrap::axum_layer());
+/// # }
+/// ```
+#[cfg(feature = "org-context")]
+#[derive(Clone, Debug)]
+pub struct OrgContextSpanEnricher;
+
+#[cfg(feature = "org-context")]
+impl<S> Layer<S> for OrgContextSpanEnricher {
+    type Service = OrgContextSpanEnricherService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        OrgContextSpanEnricherService { inner }
+    }
+}
+
+/// Tower [`Service`] produced by [`OrgContextSpanEnricher`].
+///
+/// This type is not constructed directly. It is returned by
+/// [`OrgContextSpanEnricher`] when wrapping an inner [`tower::Service`].
+#[cfg(feature = "org-context")]
+#[derive(Clone, Debug)]
+pub struct OrgContextSpanEnricherService<S> {
+    inner: S,
+}
+
+#[cfg(feature = "org-context")]
+static MISSING_ORG_CONTEXT_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "org-context")]
+impl<S> Service<Request<Body>> for OrgContextSpanEnricherService<S>
+where
+    S: Service<Request<Body>, Response = Response<Body>>,
+{
+    type Response = Response<Body>;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        match req.extensions().get::<api_bones::OrganizationContext>() {
+            Some(ctx) => {
+                crate::span_enrichment::emit_enduser_fields(ctx);
+            }
+            None => {
+                if !MISSING_ORG_CONTEXT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        target: "otel_bootstrap::org_context",
+                        "OrganizationContext extension missing from request; \
+                         enduser.* span attributes will not be emitted. This \
+                         warning is logged once per process."
+                    );
+                }
+            }
+        }
+        self.inner.call(req)
+    }
+}
+
 /// [`Extractor`] that reads from [`HeaderMap`].
 struct HeaderExtractor<'a>(&'a HeaderMap);
 

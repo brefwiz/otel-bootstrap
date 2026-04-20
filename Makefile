@@ -1,5 +1,5 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
-        ci-fmt ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit \
+        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit \
         install-nextest install-llvm-cov \
         e2e-up e2e-down e2e-logs e2e-run clean
 
@@ -68,13 +68,13 @@ test: fmt-check lint install-nextest ## Run all tests (local)
 # CI targets (called directly from Forgejo Actions)
 # =============================================================================
 
-ci-fmt: ## CI: format check
+ci-format: ## CI: format check
 	$(CARGO) fmt --all -- --check
 
 ci-lint: ## CI: clippy strict
 	$(CARGO) clippy --workspace -- -D warnings
 
-ci-check: ci-fmt ci-lint ## CI: format + lint (stage 1)
+ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 	@echo "$(GREEN)✅ All code quality checks passed$(RESET)"
 
 ci-test: ## CI: run unit tests with nextest

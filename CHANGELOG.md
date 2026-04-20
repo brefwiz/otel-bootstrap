@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-20
+
+### Added
+
+- **`enduser.*` span enrichment** — new `span_enrichment` module behind the `org-context` feature flag emits the four canonical attributes mandated by ADR platform/0015 (amending platform/0010): `enduser.id`, `enduser.org_id`, `enduser.org_path` (typed array of UUID strings, root-first — not a joined string), and `enduser.principal_kind`. `emit_enduser_fields(&ctx)` is the single helper shared by HTTP, NATS, and job-worker entry points. A tower layer for axum (`otel_bootstrap::org_context_span_enricher_layer`, gated on `axum + org-context`) reads `OrganizationContext` from request extensions and records the attributes on the active tracing span; missing-context requests (platform-scope routes) are a no-op with a single `warn!` per process. Fixes #49.
+
 ## [0.2.3] — 2026-04-07
 
 ### Changed
