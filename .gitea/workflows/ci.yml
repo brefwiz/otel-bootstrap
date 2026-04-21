@@ -199,36 +199,33 @@ jobs:
         run: docker compose down 2>/dev/null || true
 
   # ==========================================================================
-  # publish — gated on all checks, main branch only
+  # auto-tag — creates a semver tag when Cargo.toml version is new.
+  # Tag push then triggers release.yml automatically.
   # ==========================================================================
-  publish:
-    name: Publish to Forgejo Registry
+  auto-tag:
+    name: Auto-tag release
     runs-on: brefwiz
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [fmt, clippy, audit, test, e2e]
-    container:
-      image: ${{ vars.RUST_CI_IMAGE }}
-      credentials:
-        username: ${{ secrets.HARBOR_USER }}
-        password: ${{ secrets.HARBOR_TOKEN }}
+    if: >-
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Publish crate
-        env:
-          CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_PUBLISHER_TOKEN }}"
-        run: |
-          if ! cargo publish --registry brefwiz --allow-dirty 2>&1 | tee /tmp/publish.log; then
-            if grep -q "already uploaded\|already exists" /tmp/publish.log; then
-              echo "⚠️ otel-bootstrap already published at this version"
-              exit 0
-            else
-              cat /tmp/publish.log; exit 1
-            fi
-          fi
-      - name: Summary
-        if: success()
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "## 📦 otel-bootstrap Published" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** brefwiz" >> $GITHUB_STEP_SUMMARY
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/auto-tag
+        with:
+          checkout: "false"
+          gitea-token: ${{ secrets.PACKAGE_PUBLISHER_TOKEN }}
