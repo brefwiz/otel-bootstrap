@@ -39,10 +39,13 @@ jobs:
           mkdir -p collector-output && chmod 777 collector-output
           docker compose up -d
           echo "Waiting for collector on :4317..."
-          for i in $(seq 1 30); do
-            nc -z 127.0.0.1 4317 2>/dev/null && echo "Collector ready" && break
+          for i in $(seq 1 60); do
+            nc -z 127.0.0.1 4317 2>/dev/null && echo "Collector ready after ${i}s" && exit 0
             sleep 1
           done
+          echo "Collector did not become ready within 60 seconds"
+          docker compose logs --tail=50
+          exit 1
 
       - name: Coverage gate (≤1 uncovered line)
         run: make ci-coverage
