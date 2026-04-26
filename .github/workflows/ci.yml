@@ -17,6 +17,7 @@ jobs:
     with:
       run-coverage: false   # coverage requires a live OTel Collector — handled in e2e job
       run-no-std: false
+      run-no-default-features: false   # crate requires at least one of: grpc, http
 
   # Coverage gate requires a live OTel Collector on :4317.
   e2e:
@@ -37,12 +38,15 @@ jobs:
       - name: Start OTel Collector
         run: |
           mkdir -p collector-output && chmod 777 collector-output
-          docker compose up -d
-          echo "Waiting for collector on :4317..."
+          docker compose up -d --wait --wait-timeout 60
+          echo "Collector healthy — verifying port 4317 reachable from host..."
           for i in $(seq 1 30); do
-            nc -z 127.0.0.1 4317 2>/dev/null && echo "Collector ready" && break
+            bash -c '</dev/tcp/127.0.0.1/4317' 2>/dev/null && echo "Port 4317 ready after ${i}s" && exit 0
             sleep 1
           done
+          echo "Port 4317 not reachable after 30 seconds"
+          docker compose logs --tail=50
+          exit 1
 
       - name: Coverage gate (≤1 uncovered line)
         run: make ci-coverage
