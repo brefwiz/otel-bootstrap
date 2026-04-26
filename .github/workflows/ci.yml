@@ -17,6 +17,7 @@ jobs:
     with:
       run-coverage: false   # coverage requires a live OTel Collector — handled in e2e job
       run-no-std: false
+      run-no-default-features: false   # crate requires at least one of: grpc, http
 
   # Coverage gate requires a live OTel Collector on :4317.
   e2e:
