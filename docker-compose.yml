@@ -5,6 +5,7 @@ services:
     user: "${OTEL_UID:-1000}:${OTEL_GID:-1000}"
     ports:
       - "4317:4317"
+      - "13133:13133"
     volumes:
       - ./collector-config.yaml:/etc/otel/config.yaml:ro
       - ./collector-output:/var/lib/otel

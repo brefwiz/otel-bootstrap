@@ -15,9 +15,10 @@ jobs:
   ci:
     uses: brefwiz/shared-ci-workflows/.github/workflows/rust.yml@main
     with:
-      run-coverage: false   # coverage requires a live OTel Collector — handled in e2e job
+      run-coverage: false   # coverage handled in e2e job
       run-no-std: false
       run-no-default-features: false   # crate requires at least one of: grpc, http
+      extra-test-flags: "-E 'not binary(e2e)'"  # re-enable via run-collector once shared workflow merges
 
   # Coverage gate requires a live OTel Collector on :4317.
   e2e:
@@ -38,14 +39,18 @@ jobs:
       - name: Start OTel Collector
         run: |
           mkdir -p collector-output && chmod 777 collector-output
-          docker compose up -d --wait --wait-timeout 60
-          echo "Collector healthy — verifying port 4317 reachable from host..."
-          for i in $(seq 1 30); do
-            bash -c '</dev/tcp/127.0.0.1/4317' 2>/dev/null && echo "Port 4317 ready after ${i}s" && exit 0
+          docker compose up -d
+          echo "Waiting for collector health endpoint on :13133..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:13133/ > /dev/null 2>&1; then
+              echo "Collector ready after ${i}s"
+              exit 0
+            fi
             sleep 1
           done
-          echo "Port 4317 not reachable after 30 seconds"
-          docker compose logs --tail=50
+          echo "Collector did not become ready within 60 seconds"
+          docker compose ps
+          docker compose logs --tail=100
           exit 1
 
       - name: Coverage gate (≤1 uncovered line)
