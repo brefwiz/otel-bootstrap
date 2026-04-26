@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"   # weekly Monday 06:00 UTC — surfaces expired allowlist entries and new advisories
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: brefwiz/shared-ci-workflows/.github/workflows/rust.yml@main
+    with:
+      run-coverage: false   # coverage requires a live OTel Collector — handled in e2e job
+      run-no-std: false
+
+  # Coverage gate requires a live OTel Collector on :4317.
+  e2e:
+    name: E2E + Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-nextest and cargo-llvm-cov
+        run: |
+          cargo install cargo-nextest --version 0.9.114 --locked
+          cargo install cargo-llvm-cov --locked
+
+      - name: Start OTel Collector
+        run: |
+          mkdir -p collector-output && chmod 777 collector-output
+          docker compose up -d
+          echo "Waiting for collector on :4317..."
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 4317 2>/dev/null && echo "Collector ready" && break
+            sleep 1
+          done
+
+      - name: Coverage gate (≤1 uncovered line)
+        run: make ci-coverage
+
+      - name: Collector diagnostics
+        if: failure()
+        run: |
+          echo "=== Collector logs ===" && docker compose logs --tail=100
+          echo "=== Traces ===" && cat collector-output/traces.jsonl 2>/dev/null || true
+
+      - name: Teardown
+        if: always()
+        run: docker compose down 2>/dev/null || true

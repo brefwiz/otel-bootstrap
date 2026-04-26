@@ -1,11 +1,17 @@
 [package]
 name = "otel-bootstrap"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
+authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
-license = "LicenseRef-Proprietary"
-repository = "https://git.brefwiz.com/open/otel-bootstrap"
-publish = ["brefwiz"]
+license = "MIT"
+repository = "https://github.com/brefwiz/otel-bootstrap"
+homepage = "https://github.com/brefwiz/otel-bootstrap"
+documentation = "https://docs.rs/otel-bootstrap"
+readme = "README.md"
+keywords = ["opentelemetry", "otlp", "tracing", "observability", "axum"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+rust-version = "1.85"
 
 [features]
 default = ["grpc"]

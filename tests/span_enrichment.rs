@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-Proprietary
+// SPDX-License-Identifier: MIT
 //! Integration tests for `enduser.*` span-attribute emission.
 //!
 //! Exercises the three entry points that ADR platform/0015 requires to emit an

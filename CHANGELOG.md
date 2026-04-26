@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-25
+
+### Changed
+
+- **License** — `LicenseRef-Proprietary` → MIT.
+- **Repository** — moved from `git.brefwiz.com` to `github.com/brefwiz/otel-bootstrap`.
+- **`span_enrichment` doc comment** — generalized language; removed internal ADR references.
+
+### Added
+
+- `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `LICENSE` — standard open-source packaging.
+
 ## [0.3.1] — 2026-04-21
 
 ### Changed
@@ -61,8 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed Docker dependency from E2E test binary (`fix(e2e): remove docker dependency from test binary`, `5690d86`)
 - Switched coverage gate to `--fail-uncovered-lines 1` (`fix(ci): switch coverage gate to --fail-uncovered-lines 1`, `1c1267f`)
 
-[Unreleased]: https://git.brefwiz.com/brefwiz/otel-bootstrap/compare/v0.3.0...HEAD
-[0.3.0]: https://git.brefwiz.com/brefwiz/otel-bootstrap/compare/v0.2.4...v0.3.0
-[0.2.3]: https://git.brefwiz.com/brefwiz/otel-bootstrap/compare/v0.2.2...v0.2.3
-[0.2.2]: https://git.brefwiz.com/brefwiz/otel-bootstrap/compare/v0.2.0...v0.2.2
-[0.2.0]: https://git.brefwiz.com/brefwiz/otel-bootstrap/releases/tag/v0.2.0
+[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/brefwiz/otel-bootstrap/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/brefwiz/otel-bootstrap/compare/v0.2.0...v0.2.2
+[0.2.0]: https://github.com/brefwiz/otel-bootstrap/releases/tag/v0.2.0

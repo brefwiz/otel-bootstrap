@@ -1,0 +1,5 @@
+name: "otel-bootstrap CodeQL config"
+
+# Examples are demonstration code — exclude from all queries.
+paths-ignore:
+  - examples

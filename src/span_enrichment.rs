@@ -1,16 +1,15 @@
-// SPDX-License-Identifier: LicenseRef-Proprietary
+// SPDX-License-Identifier: MIT
 //! Canonical `enduser.*` span-attribute emission from [`OrganizationContext`].
 //!
-//! Implements the fan-out contract of ADR platform/0015 (amending platform/0010):
-//! every span at or below the request boundary carries
+//! Every span at or below the request boundary carries
 //!
 //! - `enduser.id = ctx.principal.id`
 //! - `enduser.org_id = ctx.org_id` (UUID string)
 //! - `enduser.org_path = ctx.org_path` (typed array of UUID strings, root-first)
 //! - `enduser.principal_kind = ctx.principal.kind`
 //!
-//! Attribute keys are frozen by ADR platform/0010; do not introduce
-//! `brefwiz.*` variants.
+//! Attribute keys follow OpenTelemetry semantic conventions for `enduser.*`;
+//! avoid introducing vendor-prefixed variants.
 //!
 //! The attribute emitter is a single helper — [`emit_enduser_fields`] — that
 //! the HTTP middleware, NATS consumers, and job workers all call. The

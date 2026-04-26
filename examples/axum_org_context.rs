@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-Proprietary
+// SPDX-License-Identifier: MIT
 //! Example axum server wiring the `OrgContextSpanEnricher` layer.
 //!
 //! Demonstrates the tower layer ordering required by ADR platform/0015:
