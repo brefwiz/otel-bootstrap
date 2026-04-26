@@ -43,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "api-bones-test"
-version = "4.5.0"
+version = "4.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba73c0e7e5f891581127011e24172209a985c61e654a3daebbe568ae96d30d1c"
+checksum = "af667859a64f55983e29f880ec819d2a8c658ead007381f578a4735888451e11"
 dependencies = [
  "api-bones",
  "chrono",

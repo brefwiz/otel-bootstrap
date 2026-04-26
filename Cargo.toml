@@ -59,4 +59,4 @@ opentelemetry = { version = "0.31", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 api-bones = { version = "4.5.0", default-features = false, features = ["std", "uuid"] }
-api-bones-test = { version = "4.5.0", default-features = false, features = ["builders"] }
+api-bones-test = { version = "4.5.1", default-features = false, features = ["builders"] }
