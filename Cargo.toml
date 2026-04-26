@@ -34,7 +34,7 @@ opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_ex
 hostname = "0.4"
 axum = { version = "=0.8", optional = true }
 tower = { version = "0.5", optional = true }
-api-bones = { version = "4.0.1", default-features = false, features = ["std", "uuid"], optional = true }
+api-bones = { version = "4.5.0", default-features = false, features = ["std", "uuid"], optional = true }
 
 [[example]]
 name = "basic_setup"
@@ -58,4 +58,4 @@ serde_json = "1"
 opentelemetry = { version = "0.31", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
-api-bones = { version = "4.0.1", default-features = false, features = ["std", "uuid"] }
+api-bones = { version = "4.5.0", default-features = false, features = ["std", "uuid"] }
