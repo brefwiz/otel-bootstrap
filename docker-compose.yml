@@ -8,3 +8,9 @@ services:
     volumes:
       - ./collector-config.yaml:/etc/otel/config.yaml:ro
       - ./collector-output:/var/lib/otel
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "cat /dev/null > /dev/tcp/127.0.0.1/4317"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s

@@ -37,13 +37,13 @@ jobs:
       - name: Start OTel Collector
         run: |
           mkdir -p collector-output && chmod 777 collector-output
-          docker compose up -d
-          echo "Waiting for collector on :4317..."
-          for i in $(seq 1 60); do
-            nc -z 127.0.0.1 4317 2>/dev/null && echo "Collector ready after ${i}s" && exit 0
+          docker compose up -d --wait --wait-timeout 60
+          echo "Collector healthy — verifying port 4317 reachable from host..."
+          for i in $(seq 1 30); do
+            bash -c '</dev/tcp/127.0.0.1/4317' 2>/dev/null && echo "Port 4317 ready after ${i}s" && exit 0
             sleep 1
           done
-          echo "Collector did not become ready within 60 seconds"
+          echo "Port 4317 not reachable after 30 seconds"
           docker compose logs --tail=50
           exit 1
 
