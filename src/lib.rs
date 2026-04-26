@@ -936,6 +936,9 @@ pub fn org_context_span_enricher_layer() -> axum_middleware::OrgContextSpanEnric
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resource_contains_all_attributes_when_provided() {
@@ -1019,6 +1022,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_reads_traceidratio() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "traceidratio");
             set_env("OTEL_TRACES_SAMPLER_ARG", "0.42");
@@ -1039,6 +1043,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_returns_none_when_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             remove_env("OTEL_TRACES_SAMPLER");
         }
@@ -1047,6 +1052,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_reads_parentbased_traceidratio() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "parentbased_traceidratio");
             set_env("OTEL_TRACES_SAMPLER_ARG", "0.1");
@@ -1067,6 +1073,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_parentbased_always_on() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "parentbased_always_on");
         }
@@ -1083,6 +1090,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_parentbased_always_off() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "parentbased_always_off");
         }
@@ -1099,6 +1107,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_always_on() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "always_on");
         }
@@ -1113,6 +1122,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_always_off() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "always_off");
         }
@@ -1127,6 +1137,7 @@ mod tests {
 
     #[test]
     fn sampler_from_env_unknown_returns_error() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "unknown_sampler");
         }
@@ -1182,6 +1193,7 @@ mod tests {
 
     #[test]
     fn timeout_from_env_reads_milliseconds() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_EXPORTER_OTLP_TIMEOUT", "5000");
         }
@@ -1194,6 +1206,7 @@ mod tests {
 
     #[test]
     fn timeout_from_env_returns_none_when_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             remove_env("OTEL_EXPORTER_OTLP_TIMEOUT");
         }
@@ -1220,6 +1233,7 @@ mod tests {
 
     #[test]
     fn init_returns_error_for_unknown_otel_traces_sampler() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_TRACES_SAMPLER", "not_a_real_sampler");
         }
@@ -1300,6 +1314,7 @@ mod tests {
     #[test]
     #[cfg(feature = "grpc")]
     fn protocol_from_env_reads_grpc() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
         }
@@ -1312,6 +1327,7 @@ mod tests {
     #[test]
     #[cfg(feature = "http")]
     fn protocol_from_env_reads_http_protobuf() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
         }
@@ -1323,6 +1339,7 @@ mod tests {
 
     #[test]
     fn protocol_from_env_returns_none_when_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             remove_env("OTEL_EXPORTER_OTLP_PROTOCOL");
         }
@@ -1331,6 +1348,7 @@ mod tests {
 
     #[test]
     fn protocol_from_env_returns_none_for_unknown() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             set_env("OTEL_EXPORTER_OTLP_PROTOCOL", "websocket");
         }
