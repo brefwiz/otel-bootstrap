@@ -13,6 +13,10 @@ keywords = ["opentelemetry", "otlp", "tracing", "observability", "axum"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 rust-version = "1.85"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = ["grpc"]
 grpc = ["opentelemetry-otlp/grpc-tonic"]

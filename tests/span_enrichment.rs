@@ -122,7 +122,11 @@ async fn http_path_records_all_four_enduser_attributes() {
     let ctx = sample_ctx();
     let expected_id = ctx.principal.id.to_string();
     let expected_org_id = ctx.org_id.inner().to_string();
-    let expected_path: Vec<String> = ctx.org_path.iter().map(|id| id.inner().to_string()).collect();
+    let expected_path: Vec<String> = ctx
+        .org_path
+        .iter()
+        .map(|id| id.inner().to_string())
+        .collect();
 
     let app: Router = Router::new()
         .route(
@@ -173,7 +177,11 @@ async fn non_http_path_produces_identical_attribute_set_as_http() {
     let ctx = sample_ctx();
     let expected_id = ctx.principal.id.to_string();
     let expected_org_id = ctx.org_id.inner().to_string();
-    let expected_path: Vec<String> = ctx.org_path.iter().map(|id| id.inner().to_string()).collect();
+    let expected_path: Vec<String> = ctx
+        .org_path
+        .iter()
+        .map(|id| id.inner().to_string())
+        .collect();
 
     // Simulate a NATS consumer / job worker: caller owns the span.
     let worker_span = tracing::info_span!("job.process");
