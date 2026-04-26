@@ -376,7 +376,7 @@ pub struct TelemetryBuilder {
     extra_metric_readers: Vec<MeterProviderInstaller>,
 }
 
-/// Type-erased adapter that applies an extra [`MetricReader`] to the
+/// Type-erased adapter that applies an extra `MetricReader` to the
 /// in-progress [`MeterProviderBuilder`]. Stored as a closure so the trait
 /// (which is generic, not object-safe in a useful way here) can be ranged
 /// over uniformly inside [`TelemetryBuilder`].
@@ -494,7 +494,7 @@ impl TelemetryBuilder {
     /// [`with_metrics`](Self::with_metrics) is enabled) and before
     /// `.build()` is called. The closure is the escape hatch for everything
     /// the explicit builder methods do not cover — most importantly,
-    /// installing **additional [`MetricReader`]s** like
+    /// installing **additional `MetricReader`s** like
     /// [`opentelemetry-prometheus`](https://crates.io/crates/opentelemetry-prometheus)
     /// alongside the OTLP push, so the same instruments fan out to multiple
     /// transports without double-counting.

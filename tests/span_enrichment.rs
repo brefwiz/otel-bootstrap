@@ -24,7 +24,8 @@
 
 #![cfg(all(feature = "axum", feature = "org-context"))]
 
-use api_bones::{OrgId, OrganizationContext, Principal, RequestId};
+use api_bones::org_id::OrgId;
+use api_bones_test::builders::{FakeOrgContext, FakePrincipal};
 use axum::{
     Extension, Router,
     body::Body,
@@ -40,7 +41,6 @@ use otel_bootstrap::span_enrichment::{
 };
 use tower::ServiceExt;
 use tracing_subscriber::prelude::*;
-use uuid::Uuid;
 
 /// Build an isolated tracer provider backed by an in-memory exporter and a
 /// `tracing_subscriber` that bridges into it.
@@ -63,13 +63,13 @@ fn isolated_tracer() -> (InMemorySpanExporter, SdkTracerProvider, tracing::Dispa
     (exporter, provider, dispatch)
 }
 
-fn sample_ctx() -> (OrganizationContext, OrgId, OrgId, Uuid) {
+fn sample_ctx() -> api_bones::OrganizationContext {
     let root = OrgId::generate();
     let leaf = OrgId::generate();
-    let principal_id = Uuid::new_v4();
-    let ctx = OrganizationContext::new(leaf, Principal::human(principal_id), RequestId::new())
-        .with_org_path(vec![root, leaf]);
-    (ctx, root, leaf, principal_id)
+    let principal = FakePrincipal::user(uuid::Uuid::new_v4())
+        .org_path(vec![root, leaf])
+        .build();
+    FakeOrgContext::for_principal(&principal)
 }
 
 fn assert_enduser_attrs(
@@ -119,7 +119,14 @@ async fn http_path_records_all_four_enduser_attributes() {
     let (exporter, provider, dispatch) = isolated_tracer();
     let _guard = tracing::dispatcher::set_default(&dispatch);
 
-    let (ctx, root, leaf, principal_id) = sample_ctx();
+    let ctx = sample_ctx();
+    let expected_id = ctx.principal.id.to_string();
+    let expected_org_id = ctx.org_id.inner().to_string();
+    let expected_path: Vec<String> = ctx
+        .org_path
+        .iter()
+        .map(|id| id.inner().to_string())
+        .collect();
 
     let app: Router = Router::new()
         .route(
@@ -153,11 +160,10 @@ async fn http_path_records_all_four_enduser_attributes() {
         .find(|s| s.name == "http.request")
         .expect("http.request span exported");
 
-    let expected_path = vec![root.inner().to_string(), leaf.inner().to_string()];
     assert_enduser_attrs(
         &request_span.attributes,
-        &principal_id.to_string(),
-        &leaf.inner().to_string(),
+        &expected_id,
+        &expected_org_id,
         &expected_path,
         "user",
     );
@@ -168,7 +174,14 @@ async fn non_http_path_produces_identical_attribute_set_as_http() {
     let (exporter, provider, dispatch) = isolated_tracer();
     let _guard = tracing::dispatcher::set_default(&dispatch);
 
-    let (ctx, root, leaf, principal_id) = sample_ctx();
+    let ctx = sample_ctx();
+    let expected_id = ctx.principal.id.to_string();
+    let expected_org_id = ctx.org_id.inner().to_string();
+    let expected_path: Vec<String> = ctx
+        .org_path
+        .iter()
+        .map(|id| id.inner().to_string())
+        .collect();
 
     // Simulate a NATS consumer / job worker: caller owns the span.
     let worker_span = tracing::info_span!("job.process");
@@ -185,11 +198,10 @@ async fn non_http_path_produces_identical_attribute_set_as_http() {
         .find(|s| s.name == "job.process")
         .expect("job.process span exported");
 
-    let expected_path = vec![root.inner().to_string(), leaf.inner().to_string()];
     assert_enduser_attrs(
         &job_span.attributes,
-        &principal_id.to_string(),
-        &leaf.inner().to_string(),
+        &expected_id,
+        &expected_org_id,
         &expected_path,
         "user",
     );
@@ -246,7 +258,7 @@ async fn child_span_inherits_enriched_parent_context_for_log_events() {
     let (exporter, provider, dispatch) = isolated_tracer();
     let _guard = tracing::dispatcher::set_default(&dispatch);
 
-    let (ctx, _root, _leaf, _principal_id) = sample_ctx();
+    let ctx = sample_ctx();
 
     let parent = tracing::info_span!("parent");
     {
