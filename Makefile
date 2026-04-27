@@ -1,4 +1,4 @@
-.PHONY: help setup check build fmt format fmt-check lint test \
+.PHONY: help setup check build fmt fmt-check lint test \
         ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit \
         install-nextest install-llvm-cov \
         e2e-up e2e-down e2e-logs e2e-run clean
@@ -37,8 +37,10 @@ build: ## Build all crates
 # Code quality
 # =============================================================================
 
-fmt format: ## Format all code
+fmt: ## Format all code
 	$(CARGO) fmt --all
+
+format: fmt
 
 fmt-check: ## Check formatting (fails if not formatted)
 	@echo "$(YELLOW)Checking formatting...$(RESET)"
