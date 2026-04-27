@@ -126,7 +126,11 @@ e2e-run: e2e-up ## Full e2e: start collector + run integration tests
 # Gates
 # =============================================================================
 
-pre-commit: fmt-check lint test ## Full local validation gate
+pre-commit: ci-format ci-lint ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
 
 clean: ## Remove build artifacts
 	$(CARGO) clean
+
+.PHONY: ci-changelog
+ci-changelog: ## CI: verify CHANGELOG.md has entry for current package version (ADR-0021)
+	@bash <(curl -fsSL https://raw.githubusercontent.com/brefwiz/shared-ci-workflows/main/scripts/check-release-changelog.sh)
