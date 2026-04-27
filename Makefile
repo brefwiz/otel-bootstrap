@@ -1,7 +1,7 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
-        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit \
+        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
         install-nextest install-llvm-cov \
-        e2e-up e2e-down e2e-logs e2e-run clean
+        e2e-up e2e-down e2e-logs e2e-run clean pre-commit
 
 .DEFAULT_GOAL := help
 
@@ -37,8 +37,10 @@ build: ## Build all crates
 # Code quality
 # =============================================================================
 
-fmt format: ## Format all code
+fmt: ## Format all code
 	$(CARGO) fmt --all
+
+format: fmt
 
 fmt-check: ## Check formatting (fails if not formatted)
 	@echo "$(YELLOW)Checking formatting...$(RESET)"
@@ -126,7 +128,19 @@ e2e-run: e2e-up ## Full e2e: start collector + run integration tests
 # Gates
 # =============================================================================
 
-pre-commit: fmt-check lint test ## Full local validation gate
+pre-commit: ci-format ci-lint ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
 
 clean: ## Remove build artifacts
 	$(CARGO) clean
+
+.PHONY: ci-changelog
+ci-changelog: ## CHANGELOG.md must have an entry for the current package version (ADR-0021)
+	@if [ -x .ci-workflows/ci-scripts/check-release-changelog.sh ]; then \
+		bash .ci-workflows/ci-scripts/check-release-changelog.sh; \
+	elif command -v check-release-changelog.sh >/dev/null 2>&1; then \
+		check-release-changelog.sh; \
+	else \
+		echo "ci-changelog: check-release-changelog.sh not found; skipping (run via CI for the full check)"; \
+	fi
+
+pre-commit: ci-format ci-lint ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
