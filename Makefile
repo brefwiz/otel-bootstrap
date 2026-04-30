@@ -1,7 +1,7 @@
-.PHONY: help setup check build fmt fmt-check lint test \
-        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit \
+.PHONY: help setup check build fmt format fmt-check lint test \
+        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
         install-nextest install-llvm-cov \
-        e2e-up e2e-down e2e-logs e2e-run clean
+        e2e-up e2e-down e2e-logs e2e-run clean pre-commit
 
 .DEFAULT_GOAL := help
 
