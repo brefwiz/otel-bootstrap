@@ -908,6 +908,7 @@ pub fn build_resource(
 ///     .layer(otel_bootstrap::axum_layer());
 /// # }
 /// ```
+#[must_use]
 #[cfg(feature = "axum")]
 pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
     axum_middleware::OtelTraceLayer
@@ -942,6 +943,7 @@ pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
 ///     .layer(otel_bootstrap::axum_layer());
 /// # }
 /// ```
+#[must_use]
 #[cfg(all(feature = "axum", feature = "org-context"))]
 pub fn org_context_span_enricher_layer() -> axum_middleware::OrgContextSpanEnricher {
     axum_middleware::OrgContextSpanEnricher

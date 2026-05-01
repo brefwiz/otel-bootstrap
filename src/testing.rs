@@ -35,6 +35,7 @@ impl crate::Telemetry {
     ///   stdout.
     /// - The tracing subscriber is installed with [`try_init`](tracing_subscriber::util::SubscriberInitExt::try_init)
     ///   so parallel tests that each call this function do not panic.
+    #[must_use]
     pub fn testing(service_name: &str) -> TelemetryHandles {
         let resource = build_resource(service_name, None, None);
 
