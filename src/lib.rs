@@ -102,9 +102,8 @@ impl TraceSampler {
 /// - `Ok(Some(_))` for a recognised sampler name.
 /// - `Err(_)` for an unrecognised sampler name (clear error at init time).
 fn sampler_from_env() -> Result<Option<TraceSampler>, Box<dyn Error>> {
-    let name = match std::env::var("OTEL_TRACES_SAMPLER") {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
+    let Ok(name) = std::env::var("OTEL_TRACES_SAMPLER") else {
+        return Ok(None);
     };
     let arg = std::env::var("OTEL_TRACES_SAMPLER_ARG").ok();
     let sampler = match name.as_str() {
@@ -176,6 +175,10 @@ impl TelemetryHandles {
     /// Must be called before the tokio runtime shuts down so the batch
     /// exporter can send remaining spans over gRPC. Safe to call multiple
     /// times — subsequent calls are no-ops.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any telemetry provider fails to shut down cleanly.
     ///
     /// # Example
     /// ```no_run
@@ -473,10 +476,10 @@ impl TelemetryBuilder {
     /// Insertion order in the subscriber stack (inner → outer, i.e. first-added
     /// to last-added):
     /// ```text
-    /// registry → custom layers → EnvFilter → fmt → OTel
+    /// registry → custom layers → EnvFilter → fmt → `OTel`
     /// ```
     /// Because `EnvFilter` is outer, it can suppress events before they reach
-    /// the `fmt` and OTel layers; custom layers receive events independently
+    /// the `fmt` and `OTel` layers; custom layers receive events independently
     /// according to their own `enabled()` implementation.
     ///
     /// # Example
@@ -551,6 +554,10 @@ impl TelemetryBuilder {
     ///     .expect("telemetry init failed");
     /// handles.shutdown().ok();
     /// ```
+    /// # Errors
+    ///
+    /// Returns an error if any exporter or provider fails to initialise.
+    #[allow(clippy::too_many_lines)]
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
         if let Some(interval) = self.metric_export_interval
             && interval.is_zero()
@@ -708,6 +715,9 @@ impl TelemetryBuilder {
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+///
+/// Returns an error if telemetry initialisation fails.
 pub fn init_telemetry(service_name: &str) -> Result<TelemetryHandles, Box<dyn Error>> {
     Telemetry::builder(service_name).init()
 }
@@ -728,6 +738,9 @@ pub fn init_telemetry(service_name: &str) -> Result<TelemetryHandles, Box<dyn Er
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+///
+/// Returns an error if telemetry initialisation fails.
 pub fn init_telemetry_with_sampler(
     service_name: &str,
     sampler: Option<TraceSampler>,
@@ -848,6 +861,7 @@ fn build_log_exporter(
 /// );
 /// // `resource` can be passed to SdkTracerProvider::builder().with_resource(resource)
 /// ```
+#[must_use]
 pub fn build_resource(
     service_name: &str,
     service_version: Option<&str>,
@@ -862,7 +876,7 @@ pub fn build_resource(
         .with_service_name(service_name.to_string())
         .with_attributes([
             KeyValue::new(HOST_NAME, hostname),
-            KeyValue::new(PROCESS_PID, std::process::id() as i64),
+            KeyValue::new(PROCESS_PID, i64::from(std::process::id())),
         ]);
 
     if let Some(version) = service_version {
@@ -894,6 +908,7 @@ pub fn build_resource(
 ///     .layer(otel_bootstrap::axum_layer());
 /// # }
 /// ```
+#[must_use]
 #[cfg(feature = "axum")]
 pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
     axum_middleware::OtelTraceLayer
@@ -928,6 +943,7 @@ pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
 ///     .layer(otel_bootstrap::axum_layer());
 /// # }
 /// ```
+#[must_use]
 #[cfg(all(feature = "axum", feature = "org-context"))]
 pub fn org_context_span_enricher_layer() -> axum_middleware::OrgContextSpanEnricher {
     axum_middleware::OrgContextSpanEnricher

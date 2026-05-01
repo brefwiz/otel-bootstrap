@@ -100,7 +100,7 @@ where
             let status_code = response.status().as_u16();
             cx.span().set_attribute(opentelemetry::KeyValue::new(
                 HTTP_RESPONSE_STATUS_CODE,
-                status_code as i64,
+                i64::from(status_code),
             ));
             if response.status().is_server_error() {
                 cx.span().set_status(Status::Error {
