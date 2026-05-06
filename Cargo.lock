@@ -28,9 +28,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api-bones"
-version = "4.5.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50772f5282534857e3da570b2c3148a8895827a029837d962f9fe68b8b166c2c"
+checksum = "7df398b1a5687a866d82959daf45533d486d30ba543565d395288d0f4ca7301a"
 dependencies = [
  "chrono",
  "serde",
@@ -43,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "api-bones-test"
-version = "4.5.1"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af667859a64f55983e29f880ec819d2a8c658ead007381f578a4735888451e11"
+checksum = "808c71817b75ebf58fb3e6b5ebbfd6ce8426a85ac8e8960197a4b6cd6d26440c"
 dependencies = [
  "api-bones",
  "chrono",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "otel-bootstrap"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "api-bones",
  "api-bones-test",
