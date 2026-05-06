@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-05
+
+### Added
+
+- **Quorum identity integration** — `span_enrichment` module supports enriching spans with `quorum_identity` context via new `OrganizationContext` type. Includes new axum middleware layer for automatic enduser span attribute population from request extensions. Fixes #57.
+
 ## [0.4.0] — 2026-04-25
 
 ### Changed
@@ -73,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed Docker dependency from E2E test binary (`fix(e2e): remove docker dependency from test binary`, `5690d86`)
 - Switched coverage gate to `--fail-uncovered-lines 1` (`fix(ci): switch coverage gate to --fail-uncovered-lines 1`, `1c1267f`)
 
-[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.2.3...v0.3.0

@@ -24,8 +24,6 @@
 
 #![cfg(all(feature = "axum", feature = "org-context"))]
 
-use api_bones::org_id::OrgId;
-use api_bones_test::builders::{FakeOrgContext, FakePrincipal};
 use axum::{
     Extension, Router,
     body::Body,
@@ -39,15 +37,11 @@ use opentelemetry_sdk::trace::{
 use otel_bootstrap::span_enrichment::{
     ENDUSER_ID, ENDUSER_ORG_ID, ENDUSER_ORG_PATH, ENDUSER_PRINCIPAL_KIND, emit_enduser_fields,
 };
+use quorum_identity::{OrgId, OrganizationContext, Principal, RequestId};
 use tower::ServiceExt;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 
-/// Build an isolated tracer provider backed by an in-memory exporter and a
-/// `tracing_subscriber` that bridges into it.
-///
-/// Each test gets its own provider so assertions are scoped to spans created
-/// inside that test. The returned guard must be kept alive for the duration of
-/// the test — dropping it unsubscribes.
 fn isolated_tracer() -> (InMemorySpanExporter, SdkTracerProvider, tracing::Dispatch) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = SdkTracerProvider::builder()
@@ -63,13 +57,16 @@ fn isolated_tracer() -> (InMemorySpanExporter, SdkTracerProvider, tracing::Dispa
     (exporter, provider, dispatch)
 }
 
-fn sample_ctx() -> api_bones::OrganizationContext {
-    let root = OrgId::generate();
-    let leaf = OrgId::generate();
-    let principal = FakePrincipal::user(uuid::Uuid::new_v4())
-        .org_path(vec![root, leaf])
-        .build();
-    FakeOrgContext::for_principal(&principal)
+fn new_org_id() -> OrgId {
+    OrgId::new(Uuid::new_v4().to_string())
+}
+
+fn sample_ctx() -> OrganizationContext {
+    let root = new_org_id();
+    let leaf = new_org_id();
+    let principal = Principal::human(Uuid::new_v4());
+    OrganizationContext::new(leaf.clone(), principal, RequestId::new())
+        .with_org_path(vec![root, leaf])
 }
 
 fn assert_enduser_attrs(
@@ -121,18 +118,17 @@ async fn http_path_records_all_four_enduser_attributes() {
 
     let ctx = sample_ctx();
     let expected_id = ctx.principal.id.to_string();
-    let expected_org_id = ctx.org_id.inner().to_string();
+    let expected_org_id = ctx.org_id.as_str().to_owned();
     let expected_path: Vec<String> = ctx
         .org_path
         .iter()
-        .map(|id| id.inner().to_string())
+        .map(|id| id.as_str().to_owned())
         .collect();
 
     let app: Router = Router::new()
         .route(
             "/x",
             get(|| async {
-                // Force a tracing span so the enricher has somewhere to record.
                 let _s = tracing::info_span!("handler").entered();
                 "ok"
             }),
@@ -140,7 +136,6 @@ async fn http_path_records_all_four_enduser_attributes() {
         .layer(otel_bootstrap::org_context_span_enricher_layer())
         .layer(Extension(ctx));
 
-    // Open a root span for this request so set_attribute has a target.
     let root_span = tracing::info_span!("http.request");
     let _enter = root_span.enter();
 
@@ -176,14 +171,13 @@ async fn non_http_path_produces_identical_attribute_set_as_http() {
 
     let ctx = sample_ctx();
     let expected_id = ctx.principal.id.to_string();
-    let expected_org_id = ctx.org_id.inner().to_string();
+    let expected_org_id = ctx.org_id.as_str().to_owned();
     let expected_path: Vec<String> = ctx
         .org_path
         .iter()
-        .map(|id| id.inner().to_string())
+        .map(|id| id.as_str().to_owned())
         .collect();
 
-    // Simulate a NATS consumer / job worker: caller owns the span.
     let worker_span = tracing::info_span!("job.process");
     {
         let _enter = worker_span.enter();
@@ -212,7 +206,6 @@ async fn platform_scope_request_without_extension_is_noop() {
     let (exporter, provider, dispatch) = isolated_tracer();
     let _guard = tracing::dispatcher::set_default(&dispatch);
 
-    // No Extension(ctx) — platform-scope route.
     let app: Router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .layer(otel_bootstrap::org_context_span_enricher_layer());
@@ -252,9 +245,6 @@ async fn platform_scope_request_without_extension_is_noop() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn child_span_inherits_enriched_parent_context_for_log_events() {
-    // Verifies the inheritance contract: a log-bearing child span opened inside
-    // the enriched parent shares its trace_id, so backends that correlate by
-    // trace can attribute logs to the same tenant without a handler-side copy.
     let (exporter, provider, dispatch) = isolated_tracer();
     let _guard = tracing::dispatcher::set_default(&dispatch);
 
@@ -311,7 +301,4 @@ async fn repeated_requests_without_extension_warn_only_once() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
-    // No panic / crash across repeated missing-context requests is the
-    // observable contract — the `swap(true, Relaxed)` guard in
-    // OrgContextSpanEnricherService guarantees at most one warn per process.
 }

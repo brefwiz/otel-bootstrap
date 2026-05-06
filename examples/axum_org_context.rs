@@ -14,8 +14,8 @@
 //!   cargo run --example axum_org_context --features "grpc,axum,org-context"
 //! ```
 
-use api_bones::{OrgId, OrganizationContext, Principal, RequestId};
 use axum::{Extension, Router, routing::get};
+use quorum_identity::{OrgId, OrganizationContext, Principal, RequestId};
 use std::error::Error;
 use uuid::Uuid;
 
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let handles = otel_bootstrap::init_telemetry("axum-org-context-example")?;
 
     let ctx = OrganizationContext::new(
-        OrgId::generate(),
+        OrgId::new(Uuid::new_v4().to_string()),
         Principal::human(Uuid::new_v4()),
         RequestId::new(),
     );

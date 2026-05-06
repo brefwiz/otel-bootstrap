@@ -120,7 +120,7 @@ where
 }
 
 /// Tower [`Layer`] that records `enduser.*` attributes on the active span from
-/// an [`api_bones::OrganizationContext`] carried in the request extensions.
+/// a [`quorum_identity::OrganizationContext`] carried in the request extensions.
 ///
 /// Intended to sit *inside* the axum [`axum::Extension`] layer that injects
 /// `OrganizationContext`, so the context is present by the time a request
@@ -134,11 +134,11 @@ where
 /// ```no_run
 /// # #[cfg(all(feature = "axum", feature = "org-context"))] {
 /// use axum::{Router, Extension, routing::get};
-/// use api_bones::{OrganizationContext, OrgId, Principal, RequestId};
+/// use quorum_identity::{OrganizationContext, OrgId, Principal, RequestId};
 /// use uuid::Uuid;
 ///
 /// let ctx = OrganizationContext::new(
-///     OrgId::generate(),
+///     OrgId::new(Uuid::new_v4().to_string()),
 ///     Principal::human(Uuid::new_v4()),
 ///     RequestId::new(),
 /// );
@@ -191,7 +191,10 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        match req.extensions().get::<api_bones::OrganizationContext>() {
+        match req
+            .extensions()
+            .get::<quorum_identity::OrganizationContext>()
+        {
             Some(ctx) => {
                 crate::span_enrichment::emit_enduser_fields(ctx);
             }

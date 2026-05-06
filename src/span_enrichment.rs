@@ -20,11 +20,11 @@
 //! # Example
 //! ```no_run
 //! # #[cfg(feature = "org-context")] {
-//! use api_bones::{OrganizationContext, OrgId, Principal, RequestId};
+//! use quorum_identity::{OrganizationContext, OrgId, Principal, RequestId};
 //! use uuid::Uuid;
 //!
 //! let ctx = OrganizationContext::new(
-//!     OrgId::generate(),
+//!     OrgId::new(Uuid::new_v4().to_string()),
 //!     Principal::human(Uuid::new_v4()),
 //!     RequestId::new(),
 //! );
@@ -35,8 +35,8 @@
 //! # }
 //! ```
 
-use api_bones::{OrganizationContext, PrincipalKind};
 use opentelemetry::{Array, KeyValue, StringValue, Value};
+use quorum_identity::{OrganizationContext, PrincipalKind};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// `enduser.id` — the principal's opaque identifier.
@@ -70,13 +70,13 @@ pub fn emit_enduser_fields(ctx: &OrganizationContext) {
 /// that construct the span themselves, tests that assert on a captured span).
 pub fn emit_enduser_fields_on(span: &tracing::Span, ctx: &OrganizationContext) {
     span.set_attribute(ENDUSER_ID, ctx.principal.id.as_str().to_owned());
-    span.set_attribute(ENDUSER_ORG_ID, ctx.org_id.inner().to_string());
+    span.set_attribute(ENDUSER_ORG_ID, ctx.org_id.as_str().to_owned());
     span.set_attribute(
         ENDUSER_ORG_PATH,
         Value::Array(Array::String(
             ctx.org_path
                 .iter()
-                .map(|id| StringValue::from(id.inner().to_string()))
+                .map(|id| StringValue::from(id.as_str().to_owned()))
                 .collect(),
         )),
     );
@@ -109,13 +109,13 @@ pub(crate) fn principal_kind_str(kind: PrincipalKind) -> &'static str {
 pub fn enduser_key_values(ctx: &OrganizationContext) -> [KeyValue; 4] {
     [
         KeyValue::new(ENDUSER_ID, ctx.principal.id.as_str().to_owned()),
-        KeyValue::new(ENDUSER_ORG_ID, ctx.org_id.inner().to_string()),
+        KeyValue::new(ENDUSER_ORG_ID, ctx.org_id.as_str().to_owned()),
         KeyValue::new(
             ENDUSER_ORG_PATH,
             Value::Array(Array::String(
                 ctx.org_path
                     .iter()
-                    .map(|id| StringValue::from(id.inner().to_string()))
+                    .map(|id| StringValue::from(id.as_str().to_owned()))
                     .collect(),
             )),
         ),
@@ -129,13 +129,17 @@ pub fn enduser_key_values(ctx: &OrganizationContext) -> [KeyValue; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use api_bones::{OrgId, Principal, RequestId};
     use opentelemetry::Key;
+    use quorum_identity::{OrgId, Principal, RequestId};
     use uuid::Uuid;
+
+    fn new_org_id() -> OrgId {
+        OrgId::new(Uuid::new_v4().to_string())
+    }
 
     fn ctx_with_path(org_id: OrgId, parents: &[OrgId]) -> OrganizationContext {
         let mut path = parents.to_vec();
-        path.push(org_id);
+        path.push(org_id.clone());
         OrganizationContext::new(org_id, Principal::human(Uuid::new_v4()), RequestId::new())
             .with_org_path(path)
     }
@@ -149,7 +153,7 @@ mod tests {
 
     #[test]
     fn enduser_key_values_has_all_four_attributes() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx = ctx_with_path(org_id, &[]);
         let kvs = enduser_key_values(&ctx);
 
@@ -162,9 +166,9 @@ mod tests {
 
     #[test]
     fn enduser_org_path_is_a_string_array_not_a_joined_string() {
-        let root = OrgId::generate();
-        let leaf = OrgId::generate();
-        let ctx = ctx_with_path(leaf, &[root]);
+        let root = new_org_id();
+        let leaf = new_org_id();
+        let ctx = ctx_with_path(leaf.clone(), &[root.clone()]);
         let kvs = enduser_key_values(&ctx);
 
         let org_path = kvs
@@ -175,8 +179,8 @@ mod tests {
         match &org_path.value {
             Value::Array(Array::String(segments)) => {
                 assert_eq!(segments.len(), 2, "root + leaf = 2 segments");
-                assert_eq!(segments[0].as_str(), root.inner().to_string());
-                assert_eq!(segments[1].as_str(), leaf.inner().to_string());
+                assert_eq!(segments[0].as_str(), root.as_str());
+                assert_eq!(segments[1].as_str(), leaf.as_str());
             }
             other => panic!("expected Value::Array(Array::String), got {other:?}"),
         }
@@ -184,7 +188,7 @@ mod tests {
 
     #[test]
     fn enduser_org_path_empty_when_path_is_empty() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx =
             OrganizationContext::new(org_id, Principal::human(Uuid::new_v4()), RequestId::new());
         let kvs = enduser_key_values(&ctx);
@@ -202,7 +206,7 @@ mod tests {
 
     #[test]
     fn enduser_principal_kind_for_human_is_user() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx = ctx_with_path(org_id, &[]);
         let kvs = enduser_key_values(&ctx);
 
@@ -216,7 +220,7 @@ mod tests {
 
     #[test]
     fn enduser_principal_kind_for_system_is_system() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx = OrganizationContext::new(
             org_id,
             Principal::system("otel-bootstrap.test"),
@@ -233,9 +237,9 @@ mod tests {
     }
 
     #[test]
-    fn enduser_org_id_is_the_uuid_string_of_ctx_org_id() {
-        let org_id = OrgId::generate();
-        let ctx = ctx_with_path(org_id, &[]);
+    fn enduser_org_id_is_the_string_of_ctx_org_id() {
+        let org_id = new_org_id();
+        let ctx = ctx_with_path(org_id.clone(), &[]);
         let kvs = enduser_key_values(&ctx);
 
         let kv_org_id = kvs
@@ -243,15 +247,12 @@ mod tests {
             .find(|kv| kv.key == Key::new(ENDUSER_ORG_ID))
             .expect("org_id KeyValue present");
 
-        assert_eq!(
-            kv_org_id.value.as_str().as_ref(),
-            org_id.inner().to_string()
-        );
+        assert_eq!(kv_org_id.value.as_str().as_ref(), org_id.as_str());
     }
 
     #[test]
     fn enduser_id_is_the_principal_id_string() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let id = Uuid::new_v4();
         let ctx = OrganizationContext::new(org_id, Principal::human(id), RequestId::new());
         let kvs = enduser_key_values(&ctx);
@@ -266,17 +267,14 @@ mod tests {
 
     #[test]
     fn emit_enduser_fields_is_noop_without_active_span() {
-        // tracing::Span::current() outside any active span is the disabled
-        // span; set_attribute is a no-op. This test asserts the call is at
-        // least infallible.
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx = ctx_with_path(org_id, &[]);
         emit_enduser_fields(&ctx);
     }
 
     #[test]
     fn emit_enduser_fields_on_disabled_span_is_infallible() {
-        let org_id = OrgId::generate();
+        let org_id = new_org_id();
         let ctx = ctx_with_path(org_id, &[]);
         emit_enduser_fields_on(&tracing::Span::none(), &ctx);
     }

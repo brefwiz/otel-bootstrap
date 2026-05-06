@@ -912,11 +912,11 @@ pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
 /// ```no_run
 /// # #[cfg(all(feature = "axum", feature = "org-context"))] {
 /// use axum::{Router, Extension, routing::get};
-/// use api_bones::{OrganizationContext, OrgId, Principal, RequestId};
+/// use quorum_identity::{OrganizationContext, OrgId, Principal, RequestId};
 /// use uuid::Uuid;
 ///
 /// let ctx = OrganizationContext::new(
-///     OrgId::generate(),
+///     OrgId::new(Uuid::new_v4().to_string()),
 ///     Principal::human(Uuid::new_v4()),
 ///     RequestId::new(),
 /// );
