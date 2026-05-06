@@ -1,5 +1,5 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
-        ci-format ci-lint ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
+        ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
         install-nextest install-llvm-cov \
         e2e-up e2e-down e2e-logs e2e-run clean pre-commit
 
@@ -76,6 +76,15 @@ ci-format: ## CI: format check
 ci-lint: ## CI: clippy strict
 	$(CARGO) clippy --workspace -- -D warnings
 
+ci-lockfile-diff: ## CI: assert committed Cargo.lock matches resolution (ADR-0021)
+	@cp Cargo.lock Cargo.lock.committed
+	@$(CARGO) generate-lockfile
+	@diff Cargo.lock.committed Cargo.lock || { \
+		echo ""; \
+		echo "ERROR: Cargo.lock is out of date. Run: cargo generate-lockfile && git add Cargo.lock"; \
+		mv Cargo.lock.committed Cargo.lock; exit 1; }
+	@mv Cargo.lock.committed Cargo.lock
+
 ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 	@echo "$(GREEN)✅ All code quality checks passed$(RESET)"
 
@@ -128,11 +137,11 @@ e2e-run: e2e-up ## Full e2e: start collector + run integration tests
 # Gates
 # =============================================================================
 
-pre-commit: ci-format ci-lint ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
+pre-commit: ci-format ci-lint ci-lockfile-diff ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
 
 clean: ## Remove build artifacts
 	$(CARGO) clean
 
 .PHONY: ci-changelog
 ci-changelog: ## CI: verify CHANGELOG.md has entry for current package version (ADR-0021)
-	@bash <(curl -fsSL https://raw.githubusercontent.com/brefwiz/shared-ci-workflows/main/scripts/check-release-changelog.sh)
+	@bash -lc 'bash <(curl -fsSL https://raw.githubusercontent.com/brefwiz/shared-ci-workflows/main/scripts/check-release-changelog.sh)'

@@ -41,6 +41,7 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
+      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -52,6 +53,10 @@ jobs:
       - uses: ./.ci-workflows/.gitea/actions/fmt
         with:
           checkout: "false"
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: fmt
 
   # ==========================================================================
   # clippy
@@ -66,6 +71,7 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
+      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -77,6 +83,15 @@ jobs:
       - uses: ./.ci-workflows/.gitea/actions/clippy
         with:
           checkout: "false"
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: lint
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: lockfile-diff
+          log-file: /tmp/ci-lockfile-diff.log
 
   # ==========================================================================
   # audit
@@ -91,6 +106,7 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
+      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -103,6 +119,10 @@ jobs:
         with:
           checkout: "false"
           policies-token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: audit
 
   # ==========================================================================
   # test
@@ -117,6 +137,7 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
+      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -128,6 +149,10 @@ jobs:
       - uses: ./.ci-workflows/.gitea/actions/test
         with:
           checkout: "false"
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: test
 
   # ==========================================================================
   # e2e + coverage — unique pattern: OTel Collector spawned on host via
@@ -140,8 +165,16 @@ jobs:
   e2e:
     name: E2E + Coverage
     runs-on: brefwiz
+    env:
+      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
 
       - name: Login to Harbor
         env:
@@ -174,7 +207,7 @@ jobs:
             -e RUST_BACKTRACE=1 \
             -e CARGO_REGISTRIES_BREFWIZ_TOKEN="$CARGO_REGISTRIES_BREFWIZ_TOKEN" \
             ${{ vars.RUST_CI_IMAGE }} \
-            sh -c "make install-nextest install-llvm-cov && make ci-coverage"
+            sh -c "make install-nextest install-llvm-cov && make ci-coverage 2>&1 | tee /tmp/ci-coverage.log"
 
       - name: Collector diagnostics
         if: failure()
@@ -184,6 +217,12 @@ jobs:
           echo ""
           echo "=== Trace output ==="
           cat collector-output/traces.jsonl 2>/dev/null || echo "(empty)"
+
+      - if: failure()
+        uses: ./.ci-workflows/.gitea/actions/post-failure-log
+        with:
+          step: coverage
+          log-file: /tmp/ci-coverage.log
 
       - name: Upload coverage report
         if: always()
