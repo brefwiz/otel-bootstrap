@@ -28,9 +28,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api-bones"
-version = "4.5.0"
+version = "4.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50772f5282534857e3da570b2c3148a8895827a029837d962f9fe68b8b166c2c"
+checksum = "97e3b1d5db792632182af2d1767c0f5d2d7f7309a03ca81678b8ef296eb07863"
 dependencies = [
  "chrono",
  "serde",
@@ -43,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "api-bones-test"
-version = "4.5.1"
+version = "4.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af667859a64f55983e29f880ec819d2a8c658ead007381f578a4735888451e11"
+checksum = "1b01b22edc69032dd258d751f686ced038969f25824a126280c900fed1d9fecf"
 dependencies = [
  "api-bones",
  "chrono",
@@ -1427,9 +1427,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.52.1"
+version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67dee974fe86fd92cc45b7a95fdd2f99a36a6d7b0d431a231178d3d670bbcc6"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
  "bytes",
  "libc",
