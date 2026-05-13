@@ -1,7 +1,7 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
         ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
         install-nextest install-llvm-cov \
-        e2e-up e2e-down e2e-logs e2e-run clean pre-commit
+        e2e-up e2e-down e2e-logs e2e-run clean pre-commit lockfile
 
 .DEFAULT_GOAL := help
 
@@ -136,6 +136,9 @@ e2e-run: e2e-up ## Full e2e: start collector + run integration tests
 # =============================================================================
 # Gates
 # =============================================================================
+
+lockfile: ## generate lockfile
+	cargo generate-lockfile
 
 pre-commit: ci-format ci-lint ci-lockfile-diff ci-test ci-changelog ## Run all pre-commit checks (ADR-0021)
 

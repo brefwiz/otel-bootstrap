@@ -17,14 +17,14 @@ The standard `opentelemetry` + `opentelemetry-otlp` + `tracing-subscriber` wirin
 - **Env-var configuration** — follows the OpenTelemetry spec (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER`, …).
 - **Builder API** — version, environment, sampler, custom meter setup, extra subscriber layers.
 - **Optional axum middleware** — `OtelTraceLayer` for inbound HTTP trace propagation.
-- **Optional `enduser.*` span enrichment** — emit the four canonical `enduser.*` attributes from an `api-bones::OrganizationContext` on every span.
+- **Generic `enduser.*` span enrichment** — implement `EnrichSpan` on your context type and plug it into `SpanEnricherLayer<T>` with no brefwiz dependencies required.
 - **Graceful shutdown** — drop `TelemetryHandles` to flush and shut down both providers.
 
 ## Quick start
 
 ```toml
 [dependencies]
-otel-bootstrap = "0.4"
+otel-bootstrap = "2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -59,8 +59,7 @@ let _telemetry = Telemetry::builder("my-service")
 |---------------|---------|-------------|
 | `grpc`        | ✅      | OTLP/gRPC transport via `tonic` |
 | `http`        | ❌      | OTLP/HTTP-protobuf transport via `reqwest` |
-| `axum`        | ❌      | `OtelTraceLayer` for axum servers |
-| `org-context` | ❌      | `enduser.*` span enrichment from `api-bones::OrganizationContext` |
+| `axum`        | ❌      | `OtelTraceLayer` + `SpanEnricherLayer<T>` for axum servers |
 | `testing`     | ❌      | In-memory exporters for unit tests |
 
 At least one of `grpc` or `http` must be enabled (enforced at compile time).
@@ -81,7 +80,7 @@ Full reference: [`OTEL_TRACES_SAMPLER` values](https://opentelemetry.io/docs/con
 ## Axum middleware
 
 ```toml
-otel-bootstrap = { version = "0.4", features = ["axum"] }
+otel-bootstrap = { version = "2", features = ["axum"] }
 ```
 
 ```rust
@@ -97,25 +96,37 @@ This layer reads the `traceparent` / `tracestate` headers, starts a server span,
 ## `enduser.*` span enrichment
 
 ```toml
-otel-bootstrap = { version = "0.4", features = ["axum", "org-context"] }
+otel-bootstrap = { version = "2", features = ["axum"] }
 ```
 
+Implement `EnrichSpan` on your context type, then plug it into `SpanEnricherLayer`:
+
 ```rust
-use otel_bootstrap::org_context_span_enricher_layer;
+use otel_bootstrap::span_enrichment::{EnrichSpan, span_enricher_layer};
+use tracing::Span;
+
+#[derive(Clone)]
+struct MyContext { user_id: String }
+
+impl EnrichSpan for MyContext {
+    fn enrich(&self, span: &Span) {
+        span.record("enduser.id", &self.user_id.as_str());
+    }
+}
 
 let app = Router::new()
     .route("/", get(handler))
-    .layer(org_context_span_enricher_layer());
+    .layer(span_enricher_layer::<MyContext>());
 ```
 
-Reads `OrganizationContext` from axum request extensions and records `enduser.id`, `enduser.org_id`, `enduser.org_path`, and `enduser.principal_kind` on the active span. Routes without a context are silently skipped.
+Routes with no `MyContext` extension are silently skipped.
 
 ## Examples
 
 - [`basic_setup`](examples/basic_setup.rs) — minimal init
 - [`shutdown_handling`](examples/shutdown_handling.rs) — explicit graceful flush
 - [`custom_config`](examples/custom_config.rs) — builder API with version, environment, sampler
-- [`axum_org_context`](examples/axum_org_context.rs) — axum + `enduser.*` enrichment
+- [`axum_span_enricher`](examples/axum_span_enricher.rs) — axum + generic `EnrichSpan` enrichment
 
 ## License
 

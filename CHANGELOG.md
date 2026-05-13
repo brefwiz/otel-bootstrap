@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-05-13
+
+### Changed
+
+- **`SpanEnricherLayer<T>`** — replaces `OrgContextSpanEnricher`; accepts any `T: EnrichSpan + Clone + Send + Sync + 'static` instead of being hardwired to `quorum-identity`.
+- **`span_enricher_layer::<T>()`** — replaces `org_context_span_enricher_layer()`; same axum tower layer, now generic.
+- **`span_enrichment` module unconditional** — no longer gated on the `org-context` feature flag; the module ships in all builds.
+
+### Removed
+
+- **`org-context` feature flag** — dropped; `span_enrichment` is always available.
+- **`quorum-identity` dependency** — removed entirely; callers implement `EnrichSpan` on their own context type.
+
+### Added
+
+- **`EnrichSpan` trait** — implement this on any type to drive `SpanEnricherLayer<T>` without coupling to brefwiz-internal crates.
+
 ## [1.0.0] — 2026-05-05
 
 ### Added
@@ -79,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed Docker dependency from E2E test binary (`fix(e2e): remove docker dependency from test binary`, `5690d86`)
 - Switched coverage gate to `--fail-uncovered-lines 1` (`fix(ci): switch coverage gate to --fail-uncovered-lines 1`, `1c1267f`)
 
-[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/brefwiz/otel-bootstrap/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.0...v0.3.1

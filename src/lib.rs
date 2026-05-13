@@ -32,7 +32,6 @@ pub mod testing;
 #[cfg(feature = "axum")]
 pub mod axum_middleware;
 
-#[cfg(feature = "org-context")]
 pub mod span_enrichment;
 
 use opentelemetry::KeyValue;
@@ -899,38 +898,42 @@ pub fn axum_layer() -> axum_middleware::OtelTraceLayer {
     axum_middleware::OtelTraceLayer
 }
 
-/// Construct the tower [`Layer`](tower::Layer) that records `enduser.*` span
-/// attributes from an `OrganizationContext` carried in the request extensions.
+/// Construct the tower [`Layer`](tower::Layer) that calls [`span_enrichment::EnrichSpan::enrich_span`]
+/// on every request that carries a `T` extension.
 ///
-/// Requires both the `axum` and `org-context` feature flags.
-///
-/// Place this layer *inside* the [`axum::Extension`] layer that injects
-/// `OrganizationContext`, and outside the handler, so the context is populated
+/// Requires the `axum` feature flag. Place this layer inside the
+/// [`axum::Extension`] layer that injects `T`, so the context is populated
 /// before this service inspects the extensions.
 ///
 /// # Example
 /// ```no_run
-/// # #[cfg(all(feature = "axum", feature = "org-context"))] {
+/// # #[cfg(feature = "axum")] {
 /// use axum::{Router, Extension, routing::get};
-/// use quorum_identity::{OrganizationContext, OrgId, Principal, RequestId};
-/// use uuid::Uuid;
+/// use otel_bootstrap::span_enrichment::EnrichSpan;
+/// use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 ///
-/// let ctx = OrganizationContext::new(
-///     OrgId::new(Uuid::new_v4().to_string()),
-///     Principal::human(Uuid::new_v4()),
-///     RequestId::new(),
-/// );
+/// #[derive(Clone)]
+/// struct MyCtx { user_id: String }
+///
+/// impl EnrichSpan for MyCtx {
+///     fn enrich_span(&self, span: &tracing::Span) {
+///         span.set_attribute("enduser.id", self.user_id.clone());
+///     }
+/// }
 ///
 /// let app: Router = Router::new()
 ///     .route("/", get(|| async { "ok" }))
-///     .layer(otel_bootstrap::org_context_span_enricher_layer())
-///     .layer(Extension(ctx))
+///     .layer(otel_bootstrap::span_enricher_layer::<MyCtx>())
+///     .layer(Extension(MyCtx { user_id: "u1".into() }))
 ///     .layer(otel_bootstrap::axum_layer());
 /// # }
 /// ```
-#[cfg(all(feature = "axum", feature = "org-context"))]
-pub fn org_context_span_enricher_layer() -> axum_middleware::OrgContextSpanEnricher {
-    axum_middleware::OrgContextSpanEnricher
+#[cfg(feature = "axum")]
+pub fn span_enricher_layer<T>() -> axum_middleware::SpanEnricherLayer<T>
+where
+    T: span_enrichment::EnrichSpan + Clone + Send + Sync + 'static,
+{
+    axum_middleware::SpanEnricherLayer::default()
 }
 
 #[cfg(test)]
