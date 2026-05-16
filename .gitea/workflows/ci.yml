@@ -61,6 +61,9 @@ jobs:
   # ==========================================================================
   # clippy
   # ==========================================================================
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   clippy:
     name: Clippy Lints
     runs-on: brefwiz
@@ -96,6 +99,9 @@ jobs:
   # ==========================================================================
   # audit
   # ==========================================================================
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   audit:
     name: Security Audit
     runs-on: brefwiz
@@ -127,6 +133,9 @@ jobs:
   # ==========================================================================
   # test
   # ==========================================================================
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   test:
     name: Unit Tests
     runs-on: brefwiz
@@ -162,6 +171,9 @@ jobs:
   # so this job stays bespoke. Registry token is threaded into the inner
   # docker invocation explicitly.
   # ==========================================================================
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   e2e:
     name: E2E + Coverage
     runs-on: brefwiz
@@ -241,6 +253,9 @@ jobs:
   # auto-tag — creates a semver tag when Cargo.toml version is new.
   # Tag push then triggers release.yml automatically.
   # ==========================================================================
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   auto-tag:
     name: Auto-tag release
     runs-on: brefwiz
@@ -268,3 +283,6 @@ jobs:
         with:
           checkout: "false"
           gitea-token: ${{ secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
