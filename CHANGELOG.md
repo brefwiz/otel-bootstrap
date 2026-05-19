@@ -17,8 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- **v1 limitation: no auto-rotation.** Material is read once at `init()`; the tonic Channel is built once and reused for the process lifetime. When the underlying SVID rotates (typically every 1h), the pod must restart to pick up the new material. A live rotation watcher is a planned follow-up.
 - Caller-side helpers for converting a SPIFFE `SvidWatcher` SVID into `MtlsMaterial` live in service-kit (`spiffe-client` + `service-kit/spiffe_otlp`), keeping otel-bootstrap free of brefwiz-specific SDK dependencies.
+
+### Known follow-ups (next minor)
+
+- **In-process cert rotation.** Material is read once at `init()`; the tonic Channel is built once and reused for the lifetime of the process. Mitigation: issue long-lived (≥365 days) client certs so manual rotation is infrequent; natural pod restarts (deploys, reschedules) re-read the SVID at `init()`. Live rotation watcher is the next milestone — see open issue. The shape will be a `CertSource` trait with a `next_rotation()` async hook; otel-bootstrap will rebuild OTLP providers + swap globals on rotation. Design intentionally deferred so v1 ships behind a small, reviewable surface.
 
 ### Changed (build infra)
 

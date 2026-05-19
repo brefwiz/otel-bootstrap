@@ -265,11 +265,10 @@ pub enum ExportProtocol {
 /// PEM-encoded. The CA is used to verify the collector's server cert; the
 /// client cert + key authenticate this workload to the collector.
 ///
-/// v1: passed once to [`TelemetryBuilder::with_mtls`] at init time. The
-/// resulting tonic Channel is built once and reused — there is NO
-/// auto-rotation. When the underlying SVID rotates (typically every 1h),
-/// the pod must restart to pick up the new material. A rotation watcher
-/// is a planned follow-up.
+/// To use a static (no-rotation) source, wrap in [`StaticCertSource`] and
+/// pass to [`TelemetryBuilder::with_mtls`]. For SVID-style rotation, plug
+/// in your own [`CertSource`] implementation (e.g. service-kit's
+/// `SpiffeCertSource`).
 #[cfg(feature = "grpc-mtls")]
 #[derive(Clone)]
 pub struct MtlsMaterial {
@@ -435,13 +434,28 @@ impl TelemetryBuilder {
 
     /// Enable mTLS on the gRPC OTLP exporter (requires the `grpc-mtls` feature).
     ///
-    /// The material is read once at [`init`](TelemetryBuilder::init) time; the
-    /// resulting tonic Channel is built once and reused for the lifetime of
-    /// the process. Rotation of the underlying SVID requires a pod restart.
+    /// The material is read once at [`init`](TelemetryBuilder::init) time;
+    /// the resulting tonic Channel is built once and reused for the lifetime
+    /// of the process.
     ///
     /// Forces the protocol to [`ExportProtocol::Grpc`] regardless of
     /// `OTEL_EXPORTER_OTLP_PROTOCOL` or any prior `with_protocol(...)` call.
     /// Pairs with a collector configured with `client_ca_file`.
+    ///
+    /// # Rotation
+    ///
+    /// In-process auto-rotation is **not yet implemented** — when the
+    /// underlying SVID rotates (typically every 1h), the existing tonic
+    /// Channel keeps presenting the old cert and exports start failing.
+    /// Two-part mitigation until a proper rotation watcher lands:
+    ///
+    /// 1. Issue long-lived client certs (≥365 days) so manual rotation is
+    ///    infrequent.
+    /// 2. Rely on natural pod restarts (deploys, reschedules) to pick up
+    ///    fresh material — every restart re-reads the SVID at this call.
+    ///
+    /// Rotation as a first-class feature is tracked as an immediate
+    /// follow-up (see CHANGELOG).
     #[cfg(feature = "grpc-mtls")]
     pub fn with_mtls(mut self, material: MtlsMaterial) -> Self {
         self.mtls = Some(material);
