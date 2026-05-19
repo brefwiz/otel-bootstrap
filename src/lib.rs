@@ -260,6 +260,38 @@ pub enum ExportProtocol {
     HttpProtobuf,
 }
 
+/// mTLS material for the gRPC transport. Requires the `grpc-mtls` feature.
+///
+/// PEM-encoded. The CA is used to verify the collector's server cert; the
+/// client cert + key authenticate this workload to the collector.
+///
+/// v1: passed once to [`TelemetryBuilder::with_mtls`] at init time. The
+/// resulting tonic Channel is built once and reused — there is NO
+/// auto-rotation. When the underlying SVID rotates (typically every 1h),
+/// the pod must restart to pick up the new material. A rotation watcher
+/// is a planned follow-up.
+#[cfg(feature = "grpc-mtls")]
+#[derive(Clone)]
+pub struct MtlsMaterial {
+    /// PEM-encoded client certificate chain (leaf + intermediates).
+    pub client_cert_chain_pem: Vec<u8>,
+    /// PEM-encoded client private key matching `client_cert_chain_pem`.
+    pub client_key_pem: Vec<u8>,
+    /// PEM-encoded trust bundle — collector cert must chain to one of these.
+    pub trust_bundle_pem: Vec<u8>,
+}
+
+#[cfg(feature = "grpc-mtls")]
+impl std::fmt::Debug for MtlsMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtlsMaterial")
+            .field("client_cert_chain_pem", &"<redacted>")
+            .field("client_key_pem", &"<redacted>")
+            .field("trust_bundle_pem", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Resolve the export protocol from `OTEL_EXPORTER_OTLP_PROTOCOL`.
 fn protocol_from_env() -> Option<ExportProtocol> {
     let val = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok()?;
@@ -308,6 +340,8 @@ impl Telemetry {
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            #[cfg(feature = "grpc-mtls")]
+            mtls: None,
         }
     }
 
@@ -335,6 +369,8 @@ impl Telemetry {
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            #[cfg(feature = "grpc-mtls")]
+            mtls: None,
         }
     }
 }
@@ -373,6 +409,8 @@ pub struct TelemetryBuilder {
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
     extra_metric_readers: Vec<MeterProviderInstaller>,
+    #[cfg(feature = "grpc-mtls")]
+    mtls: Option<MtlsMaterial>,
 }
 
 /// Type-erased adapter that applies an extra `MetricReader` to the
@@ -392,6 +430,22 @@ impl TelemetryBuilder {
     /// Set the deployment environment (maps to `deployment.environment.name`).
     pub fn with_environment(mut self, environment: &str) -> Self {
         self.deployment_environment = Some(environment.to_string());
+        self
+    }
+
+    /// Enable mTLS on the gRPC OTLP exporter (requires the `grpc-mtls` feature).
+    ///
+    /// The material is read once at [`init`](TelemetryBuilder::init) time; the
+    /// resulting tonic Channel is built once and reused for the lifetime of
+    /// the process. Rotation of the underlying SVID requires a pod restart.
+    ///
+    /// Forces the protocol to [`ExportProtocol::Grpc`] regardless of
+    /// `OTEL_EXPORTER_OTLP_PROTOCOL` or any prior `with_protocol(...)` call.
+    /// Pairs with a collector configured with `client_ca_file`.
+    #[cfg(feature = "grpc-mtls")]
+    pub fn with_mtls(mut self, material: MtlsMaterial) -> Self {
+        self.mtls = Some(material);
+        self.protocol = Some(ExportProtocol::Grpc);
         self
     }
 
@@ -597,7 +651,13 @@ impl TelemetryBuilder {
         };
 
         // Tracer
-        let trace_exporter = build_span_exporter(protocol, &endpoint, export_timeout)?;
+        let trace_exporter = build_span_exporter(
+            protocol,
+            &endpoint,
+            export_timeout,
+            #[cfg(feature = "grpc-mtls")]
+            self.mtls.as_ref(),
+        )?;
 
         let batch_processor = if let Some(size) = self.max_export_batch_size {
             BatchSpanProcessor::builder(trace_exporter)
@@ -628,7 +688,13 @@ impl TelemetryBuilder {
 
         // Meter (optional)
         let meter_provider = if self.metrics {
-            let metric_exporter = build_metric_exporter(protocol, &endpoint, export_timeout)?;
+            let metric_exporter = build_metric_exporter(
+                protocol,
+                &endpoint,
+                export_timeout,
+                #[cfg(feature = "grpc-mtls")]
+                self.mtls.as_ref(),
+            )?;
 
             let periodic_reader = if let Some(interval) = self.metric_export_interval {
                 PeriodicReader::builder(metric_exporter)
@@ -655,7 +721,13 @@ impl TelemetryBuilder {
 
         // Logger (optional) — bridges tracing events to the OTLP log pipeline
         let logger_provider = if self.logs {
-            let log_exporter = build_log_exporter(protocol, &endpoint, export_timeout)?;
+            let log_exporter = build_log_exporter(
+                protocol,
+                &endpoint,
+                export_timeout,
+                #[cfg(feature = "grpc-mtls")]
+                self.mtls.as_ref(),
+            )?;
 
             let lp = SdkLoggerProvider::builder()
                 .with_resource(resource)
@@ -746,10 +818,28 @@ fn timeout_from_env() -> Option<Duration> {
     Some(Duration::from_millis(ms))
 }
 
+/// Build a `tonic::transport::ClientTlsConfig` from PEM material.
+/// Centralised so the three exporter builders apply identical TLS config.
+///
+/// Note: `with_tls_config` is provided by the `WithTonicConfig` trait on
+/// `opentelemetry-otlp`'s tonic exporter builders — imported at each call
+/// site below.
+#[cfg(feature = "grpc-mtls")]
+fn build_tls_config(material: &MtlsMaterial) -> tonic::transport::ClientTlsConfig {
+    use tonic::transport::{Certificate, ClientTlsConfig, Identity};
+    ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(&material.trust_bundle_pem))
+        .identity(Identity::from_pem(
+            &material.client_cert_chain_pem,
+            &material.client_key_pem,
+        ))
+}
+
 fn build_span_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
 ) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -759,6 +849,11 @@ fn build_span_exporter(
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
+            }
+            #[cfg(feature = "grpc-mtls")]
+            if let Some(m) = mtls {
+                use opentelemetry_otlp::WithTonicConfig as _;
+                b = b.with_tls_config(build_tls_config(m));
             }
             Ok(b.build()?)
         }
@@ -779,6 +874,7 @@ fn build_metric_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
 ) -> Result<opentelemetry_otlp::MetricExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -788,6 +884,11 @@ fn build_metric_exporter(
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
+            }
+            #[cfg(feature = "grpc-mtls")]
+            if let Some(m) = mtls {
+                use opentelemetry_otlp::WithTonicConfig as _;
+                b = b.with_tls_config(build_tls_config(m));
             }
             Ok(b.build()?)
         }
@@ -808,6 +909,7 @@ fn build_log_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
 ) -> Result<opentelemetry_otlp::LogExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -817,6 +919,11 @@ fn build_log_exporter(
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
+            }
+            #[cfg(feature = "grpc-mtls")]
+            if let Some(m) = mtls {
+                use opentelemetry_otlp::WithTonicConfig as _;
+                b = b.with_tls_config(build_tls_config(m));
             }
             Ok(b.build()?)
         }

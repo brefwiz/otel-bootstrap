@@ -73,8 +73,8 @@ test: fmt-check lint install-nextest ## Run all tests (local)
 ci-format: ## CI: format check
 	$(CARGO) fmt --all -- --check
 
-ci-lint: ## CI: clippy strict
-	$(CARGO) clippy --workspace -- -D warnings
+ci-lint: ## CI: clippy strict (--all-features so feature-gated code is exercised)
+	$(CARGO) clippy --workspace --all-features --all-targets -- -D warnings
 
 ci-lockfile-diff: ## CI: assert committed Cargo.lock matches resolution (ADR-0021)
 	@cp Cargo.lock Cargo.lock.committed
@@ -89,7 +89,10 @@ ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 	@echo "$(GREEN)✅ All code quality checks passed$(RESET)"
 
 ci-test: ## CI: run unit tests with nextest
-	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace
+	# Exclude `integration-tests` feature (needs a live collector on :4317).
+	# All other compile-time features are exercised by `ci-lint --all-features`.
+	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
+		--features grpc,http,axum,testing,grpc-mtls
 
 ci-coverage: ## CI: coverage gate (≤1 uncovered line; see NOTE below)
 	# NOTE: the `None => builder` arm in `init_telemetry_with_sampler` is

@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -20,6 +20,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["grpc"]
 grpc = ["opentelemetry-otlp/grpc-tonic"]
+# mTLS for the gRPC transport. Implies grpc; pulls in tonic with TLS support.
+# Callers supply PEM material via TelemetryBuilder::with_mtls(MtlsMaterial).
+# v1: cert/key are read ONCE at init — pod must restart on SVID rotation.
+# (Rotation watcher is a follow-up; not blocking initial mTLS rollout.)
+grpc-mtls = ["grpc", "dep:tonic", "opentelemetry-otlp/tls", "opentelemetry-otlp/tls-roots"]
 http = ["opentelemetry-otlp/http-proto", "opentelemetry-otlp/reqwest-client"]
 integration-tests = []
 testing = ["opentelemetry_sdk/testing"]
@@ -37,6 +42,9 @@ opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_ex
 hostname = "0.4"
 axum = { version = "=0.8", optional = true }
 tower = { version = "0.5", optional = true }
+# Only used for ClientTlsConfig under grpc-mtls. tls-roots gives a default
+# webpki trust root; we override per-call with our own ca_certificate.
+tonic = { version = "0.14", features = ["tls-native-roots"], optional = true }
 
 [[example]]
 name = "basic_setup"
