@@ -1,5 +1,5 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
-        ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog ci-build-check \
+        ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog ci-build-check ci-release-readiness \
         install-nextest install-llvm-cov \
         e2e-up e2e-down e2e-logs e2e-run clean pre-commit lockfile
 
@@ -101,6 +101,9 @@ ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets --no-default-features --features http
 	$(CARGO) check --workspace --all-targets --no-default-features --features grpc
 	$(CARGO) check --workspace --all-targets --no-default-features --features grpc-mtls
+
+ci-release-readiness: ## Pre-release sanity (no-op: single-crate lib, no SDK to validate)
+	@echo "otel-bootstrap: single-crate lib — nothing to validate here"
 
 ci-coverage: ## CI: coverage gate (≤1 uncovered line; see NOTE below)
 	# NOTE: the `None => builder` arm in `init_telemetry_with_sampler` is
