@@ -1,5 +1,5 @@
 .PHONY: help setup check build fmt format fmt-check lint test \
-        ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog \
+        ci-format ci-lint ci-lockfile-diff ci-check ci-test ci-coverage ci-e2e ci-audit ci-changelog ci-build-check \
         install-nextest install-llvm-cov \
         e2e-up e2e-down e2e-logs e2e-run clean pre-commit lockfile
 
@@ -93,6 +93,14 @@ ci-test: ## CI: run unit tests with nextest
 	# All other compile-time features are exercised by `ci-lint --all-features`.
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
 		--features grpc,http,axum,testing,grpc-mtls
+
+ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
+	$(CARGO) check --workspace --all-targets
+	$(CARGO) check --workspace --all-targets --all-features
+	$(CARGO) check --workspace --all-targets --no-default-features
+	$(CARGO) check --workspace --all-targets --no-default-features --features http
+	$(CARGO) check --workspace --all-targets --no-default-features --features grpc
+	$(CARGO) check --workspace --all-targets --no-default-features --features grpc-mtls
 
 ci-coverage: ## CI: coverage gate (≤1 uncovered line; see NOTE below)
 	# NOTE: the `None => builder` arm in `init_telemetry_with_sampler` is
