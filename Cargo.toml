@@ -33,7 +33,7 @@ axum = ["dep:axum", "dep:tower"]
 [dependencies]
 opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics", "logs", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["metrics", "logs"] }
+opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
 opentelemetry-appender-tracing = "0.31"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
