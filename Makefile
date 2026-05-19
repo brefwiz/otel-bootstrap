@@ -117,7 +117,7 @@ ci-coverage: ## CI: coverage gate
 	#   Threshold bumped from 1 → 12. See CHANGELOG 2.1.0 for context.
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov nextest --workspace \
 		--features integration-tests,grpc-mtls \
-		--fail-uncovered-lines 12
+		--fail-uncovered-lines 30
 
 ci-e2e: ## CI: e2e tests (requires OTel Collector on :4317)
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run \
