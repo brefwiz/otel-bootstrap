@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-05-19
+
+### Added
+
+- **`grpc-mtls` feature flag** — opt-in mTLS for the gRPC OTLP exporter. Implies `grpc`; enables `opentelemetry-otlp/{tls,tls-roots}` and `tonic/tls-native-roots`.
+- **`MtlsMaterial` struct** — carries PEM-encoded client cert chain, client key, and trust bundle. `Debug` impl redacts contents.
+- **`TelemetryBuilder::with_mtls(MtlsMaterial)`** — installs the material on all three (span/metric/log) exporters via `opentelemetry-otlp::WithTonicConfig::with_tls_config`. Pins `ExportProtocol::Grpc` regardless of `OTEL_EXPORTER_OTLP_PROTOCOL` so misconfig can't silently downgrade to plaintext.
+
+### Notes
+
+- **v1 limitation: no auto-rotation.** Material is read once at `init()`; the tonic Channel is built once and reused for the process lifetime. When the underlying SVID rotates (typically every 1h), the pod must restart to pick up the new material. A live rotation watcher is a planned follow-up.
+- Caller-side helpers for converting a SPIFFE `SvidWatcher` SVID into `MtlsMaterial` live in service-kit (`spiffe-client` + `service-kit/spiffe_otlp`), keeping otel-bootstrap free of brefwiz-specific SDK dependencies.
+
+### Changed (build infra)
+
+- `Makefile` `ci-lint` now uses `--all-features --all-targets` so feature-gated paths are clippy-checked.
+- `Makefile` `ci-test` enumerates concrete features (`grpc,http,axum,testing,grpc-mtls`); the `integration-tests` feature (which needs a live :4317 collector) is opt-in.
+
 ## [2.0.0] — 2026-05-13
 
 ### Changed
