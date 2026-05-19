@@ -18,12 +18,37 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  canonical-check:
+    name: Canonical Check (ADR-0086)
+    runs-on: brefwiz
+    container:
+      image: ${{ vars.RUST_CI_IMAGE }}
+      options: --user root
+      credentials:
+        username: ${{ secrets.HARBOR_USER }}
+        password: ${{ secrets.HARBOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: brefwiz/ci-workflows
+          ref: main
+          path: .ci-workflows
+          token: ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}
+      - uses: ./.ci-workflows/.gitea/actions/canonical-check
+        with:
+          checkout: "false"
+          l4-enforce: "true"
+      - if: ${{ always() && (failure() || cancelled()) }}
+        uses: ./.ci-workflows/.gitea/actions/upload-all-logs
+
   # ==========================================================================
   # validate-version — tag must match Cargo.toml version
   # ==========================================================================
   validate-version:
     name: Validate tag matches Cargo.toml
     runs-on: brefwiz
+    needs: [canonical-check]
     steps:
       - uses: actions/checkout@v4
       - name: Check version consistency
