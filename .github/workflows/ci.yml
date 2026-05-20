@@ -37,6 +37,8 @@ jobs:
           cargo install cargo-llvm-cov --locked
 
       - name: Start OTel Collector
+        env:
+          OTEL_COLLECTOR_IMAGE: otel/opentelemetry-collector-contrib:0.150.1
         run: |
           mkdir -p collector-output && chmod 777 collector-output
           docker compose up -d

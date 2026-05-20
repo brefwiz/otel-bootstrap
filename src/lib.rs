@@ -763,12 +763,20 @@ impl TelemetryBuilder {
             .with(otel_layer);
 
         if let Some(lp) = &logger_provider {
-            registry
+            if let Err(e) = registry
                 .with(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp))
                 .try_init()
-                .ok();
-        } else {
-            registry.try_init().ok();
+            {
+                eprintln!(
+                    "otel-bootstrap: global tracing subscriber already installed — \
+                     OTLP log records will NOT be exported to the collector: {e}"
+                );
+            }
+        } else if let Err(e) = registry.try_init() {
+            eprintln!(
+                "otel-bootstrap: global tracing subscriber already installed — \
+                 OTLP telemetry will NOT be exported to the collector: {e}"
+            );
         }
 
         Ok(TelemetryHandles {
