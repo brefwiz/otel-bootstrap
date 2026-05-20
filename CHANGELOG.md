@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-05-20
+
+### Fixed
+
+- **Warn on subscriber clobber** — `registry.try_init().ok()` silently discarded errors when a global tracing subscriber was already installed. This masked the root cause of OTLP logs never reaching Loki in production. Both branches (with and without `logger_provider`) now `eprintln!` a clear message so the failure is visible in container logs.
+
 ## [2.1.0] — 2026-05-19
 
 ### Added

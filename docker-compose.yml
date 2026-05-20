@@ -1,6 +1,6 @@
 services:
   otel-collector:
-    image: registry.brefwiz.com/proxy-docker/otel/opentelemetry-collector-contrib:0.150.1
+    image: ${OTEL_COLLECTOR_IMAGE:-registry.brefwiz.com/proxy-docker/otel/opentelemetry-collector-contrib:0.150.1}
     command: ["--config", "/etc/otel/config.yaml"]
     user: "${OTEL_UID:-1000}:${OTEL_GID:-1000}"
     ports:
