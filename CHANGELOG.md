@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] — 2026-05-21
+
+### Fixed
+
+- **Empty `extra_layers` silences all tracing** — `Vec<L>::register_callsite()` on an empty Vec returns `Interest::never()`, which `Layered::pick_interest()` propagates through the entire subscriber chain when `outer=Always, inner=Never, inner_has_layer_filter=false`. Globally disabled all tracing callsites, producing zero stdout/stderr/OTLP output. Fixed by wrapping `extra_layers` in `Option`: `None` returns `Interest::always()` and is a transparent no-op.
+
 ## [2.1.1] — 2026-05-20
 
 ### Fixed

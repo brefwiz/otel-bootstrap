@@ -756,8 +756,18 @@ impl TelemetryBuilder {
         // Wire into tracing
         let otel_layer = tracing_opentelemetry::layer();
 
+        // `Vec::register_callsite()` on an empty Vec returns `Interest::never()`, which
+        // propagates through the entire layer chain via `pick_interest()` and silently
+        // disables ALL tracing callsites for the process.  Guard against this by wrapping
+        // the Vec in `Option`: `None` returns `Interest::always()` and is a no-op.
+        let extra = if self.extra_layers.is_empty() {
+            None
+        } else {
+            Some(self.extra_layers)
+        };
+
         let registry = tracing_subscriber::registry()
-            .with(self.extra_layers)
+            .with(extra)
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .with(tracing_subscriber::fmt::layer())
             .with(otel_layer);
