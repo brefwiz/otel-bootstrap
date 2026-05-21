@@ -31,7 +31,7 @@ testing = ["opentelemetry_sdk/testing"]
 axum = ["dep:axum", "dep:tower"]
 
 [dependencies]
-opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
+opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics", "logs", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["metrics", "logs"] }
 opentelemetry-appender-tracing = "0.31"
@@ -65,6 +65,6 @@ required-features = ["grpc", "axum"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
-opentelemetry = { version = "0.31", features = ["trace"] }
+opentelemetry = { version = "0.32", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
