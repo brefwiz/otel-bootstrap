@@ -11,9 +11,9 @@ on:
 jobs:
 
   fmt:
+    region: brefwiz-local
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-local
       memory: "12288"
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: ${{ vars.brefwiz-secrets.CARGO_REGISTRIES_BREFWIZ_TOKEN }}
@@ -39,9 +39,9 @@ jobs:
           gitea-token: ${{ vars.brefwiz-secrets.FORGEJO_BOT_TOKEN }}
 
   clippy:
+    region: brefwiz-local
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-local
       memory: "12288"
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: ${{ vars.brefwiz-secrets.CARGO_REGISTRIES_BREFWIZ_TOKEN }}
@@ -67,9 +67,9 @@ jobs:
           gitea-token: ${{ vars.brefwiz-secrets.FORGEJO_BOT_TOKEN }}
 
   audit:
+    region: brefwiz-light
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-light
       memory: "1536"
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: ${{ vars.brefwiz-secrets.CARGO_REGISTRIES_BREFWIZ_TOKEN }}
@@ -96,9 +96,9 @@ jobs:
           policies-token: ${{ vars.brefwiz-secrets.PACKAGE_READER_TOKEN }}
 
   test:
+    region: brefwiz-local
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-local
       memory: "12288"
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: ${{ vars.brefwiz-secrets.CARGO_REGISTRIES_BREFWIZ_TOKEN }}
@@ -124,9 +124,9 @@ jobs:
           gitea-token: ${{ vars.brefwiz-secrets.FORGEJO_BOT_TOKEN }}
 
   e2e:
+    region: brefwiz-local
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-local
       memory: "12288"
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: ${{ vars.brefwiz-secrets.CARGO_REGISTRIES_BREFWIZ_TOKEN }}
@@ -188,9 +188,9 @@ jobs:
           docker compose down 2>/dev/null || true
 
   auto-tag:
+    region: brefwiz-local
     runs-on:
       model: BREFWIZ/brefwiz/brefwiz/infra/brefwiz-ci@main
-      region: brefwiz-local
       memory: "12288"
     needs: [fmt, clippy, audit, test, e2e]
     env:
