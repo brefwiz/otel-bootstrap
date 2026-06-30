@@ -32,7 +32,12 @@ pub mod testing;
 #[cfg(feature = "axum")]
 pub mod axum_middleware;
 
+pub mod log_bridge;
 pub mod span_enrichment;
+
+pub use log_bridge::{
+    PROPAGATED_SPAN_FIELDS, SpanLogAttrs, record_span_log_attr, record_span_log_attr_on,
+};
 
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
@@ -341,6 +346,7 @@ impl Telemetry {
             extra_metric_readers: Vec::new(),
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
+            propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
         }
     }
 
@@ -370,6 +376,7 @@ impl Telemetry {
             extra_metric_readers: Vec::new(),
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
+            propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
         }
     }
 }
@@ -410,6 +417,7 @@ pub struct TelemetryBuilder {
     extra_metric_readers: Vec<MeterProviderInstaller>,
     #[cfg(feature = "grpc-mtls")]
     mtls: Option<MtlsMaterial>,
+    propagated_span_fields: &'static [&'static str],
 }
 
 /// Type-erased adapter that applies an extra `MetricReader` to the
@@ -510,6 +518,23 @@ impl TelemetryBuilder {
     /// Datadog.
     pub fn with_logs(mut self, enabled: bool) -> Self {
         self.logs = enabled;
+        self
+    }
+
+    /// Override the set of span field names propagated into OTLP log records.
+    ///
+    /// The default set is [`PROPAGATED_SPAN_FIELDS`]. Callers that add extra
+    /// tracing fields (e.g. `"request.id"`, `"enduser.id"`) can extend it:
+    ///
+    /// ```rust
+    /// const MY_FIELDS: &[&str] = &["request.id", "enduser.id", "tenant.id"];
+    /// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+    ///     .with_logs(true)
+    ///     .with_propagated_span_fields(MY_FIELDS)
+    ///     .init();
+    /// ```
+    pub fn with_propagated_span_fields(mut self, fields: &'static [&'static str]) -> Self {
+        self.propagated_span_fields = fields;
         self
     }
 
@@ -774,7 +799,10 @@ impl TelemetryBuilder {
 
         if let Some(lp) = &logger_provider {
             if let Err(e) = registry
-                .with(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp))
+                .with(crate::log_bridge::SpanAwareLogBridge::new(
+                    lp,
+                    self.propagated_span_fields,
+                ))
                 .try_init()
             {
                 eprintln!(

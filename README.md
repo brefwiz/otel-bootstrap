@@ -121,6 +121,37 @@ let app = Router::new()
 
 Routes with no `MyContext` extension are silently skipped.
 
+## Span-field log propagation
+
+When `with_logs(true)` is set, otel-bootstrap replaces the upstream log bridge with `SpanAwareLogBridge`. It propagates span-level attributes into every OTLP log record so that `request.id`, `enduser.*`, and `http.*` fields appear as Loki labels alongside the trace context.
+
+Two propagation paths are supported:
+
+- **Tracing fields** declared at span creation (`info_span!("req", "request.id" = id)`) — captured automatically for names in [`PROPAGATED_SPAN_FIELDS`].
+- **Post-creation attributes** set via `record_span_log_attr_on` — use this from middleware or `EnrichSpan::enrich_span` for fields that arrive after span creation.
+
+```rust
+use otel_bootstrap::{span_enrichment::emit_request_id, record_span_log_attr_on};
+use opentelemetry::{Key, logs::AnyValue};
+
+// In your request handler / middleware:
+emit_request_id(&request_id);  // → appears in traces + logs
+
+// In EnrichSpan::enrich_span for enduser fields:
+span.set_attribute("enduser.id", user_id.clone());
+record_span_log_attr_on(span, Key::new("enduser.id"), AnyValue::String(user_id.into()));
+```
+
+Override the captured field set per service:
+
+```rust
+const FIELDS: &[&str] = &["request.id", "enduser.id", "tenant.id"];
+let _telemetry = Telemetry::builder("my-service")
+    .with_logs(true)
+    .with_propagated_span_fields(FIELDS)
+    .init()?;
+```
+
 ## Examples
 
 - [`basic_setup`](examples/basic_setup.rs) — minimal init

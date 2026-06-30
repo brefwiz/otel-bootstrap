@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-06-30
+
+### Changed
+
+- **Dependency bump** — coordinated opentelemetry ecosystem upgrade: `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` + `opentelemetry-appender-tracing` + `opentelemetry-semantic-conventions` `0.31` → `0.32`; `tracing-opentelemetry` `0.32` → `0.33`.
+
+### Added
+
+- **`SpanAwareLogBridge`** — replaces `opentelemetry_appender_tracing::OpenTelemetryTracingBridge`. Propagates span-level fields and trace/span context into every OTLP log record. Two capture paths: (1) tracing-native fields declared at `info_span!` creation time (via `FieldCollector`); (2) fields written post-creation via `record_span_log_attr_on` (via `SpanLogAttrs` span extension).
+- **`SpanLogAttrs` span extension** — stores key-value pairs attached to a span after creation. Populated via `record_span_log_attr_on`; replayed onto log records by `SpanAwareLogBridge`.
+- **`record_span_log_attr(key, value)`** — write a log-propagation attribute on the current span from any non-Layer context (middleware, enrichers).
+- **`record_span_log_attr_on(span, key, value)`** — same, targeting an explicit span.
+- **`PROPAGATED_SPAN_FIELDS`** — default slice of field names captured at span creation and replayed into log records: `request.id`, `enduser.*`, and common `http.*` fields.
+- **`TelemetryBuilder::with_propagated_span_fields`** — override the default field set per service.
+- **`span_enrichment::emit_request_id(id)`** and `emit_request_id_on(span, id)` — dual-write `request.id` to the OTLP trace attribute and `SpanLogAttrs` so it surfaces in both Tempo and Loki.
+- **`span_enrichment::REQUEST_ID`** — canonical `"request.id"` constant.
+
 ## [2.1.2] — 2026-05-21
 
 ### Fixed
@@ -129,7 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed Docker dependency from E2E test binary (`fix(e2e): remove docker dependency from test binary`, `5690d86`)
 - Switched coverage gate to `--fail-uncovered-lines 1` (`fix(ci): switch coverage gate to --fail-uncovered-lines 1`, `1c1267f`)
 
-[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/brefwiz/otel-bootstrap/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/brefwiz/otel-bootstrap/compare/v2.1.2...v2.2.0
 [2.0.0]: https://github.com/brefwiz/otel-bootstrap/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/brefwiz/otel-bootstrap/compare/v0.3.1...v0.4.0
