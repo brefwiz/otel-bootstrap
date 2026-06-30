@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.1.2"
+version = "2.2.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -31,14 +31,14 @@ testing = ["opentelemetry_sdk/testing"]
 axum = ["dep:axum", "dep:tower"]
 
 [dependencies]
-opentelemetry = { version = "0.31", features = ["metrics", "logs"] }
-opentelemetry_sdk = { version = "0.31", features = ["metrics", "logs", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["metrics", "logs"] }
-opentelemetry-appender-tracing = "0.31"
-tracing-opentelemetry = "0.32"
+opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
+opentelemetry-appender-tracing = "0.32"
+tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing = "0.1"
-opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_experimental"] }
+opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
 hostname = "0.4"
 axum = { version = "=0.8", optional = true }
 tower = { version = "0.5", optional = true }
@@ -65,6 +65,6 @@ required-features = ["grpc", "axum"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
-opentelemetry = { version = "0.31", features = ["trace"] }
+opentelemetry = { version = "0.32", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
