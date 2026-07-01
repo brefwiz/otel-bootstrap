@@ -32,6 +32,9 @@ pub mod testing;
 #[cfg(feature = "axum")]
 pub mod axum_middleware;
 
+#[cfg(feature = "tonic-tracing")]
+pub mod grpc_middleware;
+
 pub mod log_bridge;
 pub mod span_enrichment;
 
@@ -1101,6 +1104,51 @@ where
     T: span_enrichment::EnrichSpan + Clone + Send + Sync + 'static,
 {
     axum_middleware::SpanEnricherLayer::default()
+}
+
+/// Construct the tower [`Layer`](tower::Layer) that injects the current trace
+/// context into outgoing gRPC request metadata.
+///
+/// Requires the `tonic-tracing` feature. Wrap a tonic
+/// [`tonic::transport::Channel`] with this before constructing the generated
+/// client stub, so calls make from this process propagate `traceparent` to
+/// the callee.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(feature = "tonic-tracing")]
+/// # async fn example() -> Result<(), tonic::transport::Error> {
+/// let channel = tonic::transport::Channel::from_static("http://localhost:50051")
+///     .connect()
+///     .await?;
+/// let channel = tower::ServiceBuilder::new()
+///     .layer(otel_bootstrap::grpc_client_layer())
+///     .service(channel);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "tonic-tracing")]
+pub fn grpc_client_layer() -> grpc_middleware::GrpcClientTraceLayer {
+    grpc_middleware::GrpcClientTraceLayer
+}
+
+/// Construct the tower [`Layer`](tower::Layer) that extracts trace context
+/// from incoming gRPC request metadata and opens a child span.
+///
+/// Requires the `tonic-tracing` feature. Attach to a tonic
+/// [`tonic::transport::Server`] via `.layer(...)`, before `.add_service(...)`.
+///
+/// # Example
+/// ```no_run
+/// # #[cfg(feature = "tonic-tracing")]
+/// # fn example() {
+/// let _ = tonic::transport::Server::builder()
+///     .layer(otel_bootstrap::grpc_server_layer());
+/// # }
+/// ```
+#[cfg(feature = "tonic-tracing")]
+pub fn grpc_server_layer() -> grpc_middleware::GrpcServerTraceLayer {
+    grpc_middleware::GrpcServerTraceLayer
 }
 
 #[cfg(test)]
