@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-07-01
+
+### Fixed
+
+- **`GrpcClientTraceService` / `GrpcServerTraceService` / `OtelTraceService`: panic on inner services that track readiness per-handle.** `call()` cloned `self.inner` and fired the request on the fresh clone instead of the handle `poll_ready` was called on, violating the tower `Service` contract. `tonic::transport::Channel` wraps a `tower::buffer::Buffer` internally, which enforces this per-handle — firing on an unpolled clone panicked with `"send_item called without first calling poll_reserve"`. Fixed with the standard `mem::replace` swap (clone for next time, fire on the already-ready handle).
+
 ## [2.3.0] — 2026-07-01
 
 ### Added
