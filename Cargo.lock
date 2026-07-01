@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "otel-bootstrap"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "axum",
  "hostname",
