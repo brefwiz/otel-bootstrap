@@ -91,7 +91,16 @@ where
             propagator.inject_context(&cx, &mut MetadataInjector(req.headers_mut()));
         });
 
-        let mut inner = self.inner.clone();
+        // `poll_ready` was called on `self.inner` (the tower contract:
+        // callers must poll_ready before call on the exact same handle).
+        // Some inner services — notably tonic's `Channel`, which wraps a
+        // `tower::buffer::Buffer` — track readiness per-handle: calling on a
+        // fresh clone that was never polled panics ("send_item called
+        // without first calling poll_reserve"). Swap the clone into `self`
+        // for the *next* call, and fire this request on the already-ready
+        // original handle.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
         Box::pin(async move { inner.call(req).await })
     }
 }
@@ -146,7 +155,10 @@ where
             .start_with_context(&tracer, &parent_cx);
         let cx = parent_cx.with_span(span);
 
-        let mut inner = self.inner.clone();
+        // See the matching comment in `GrpcClientTraceService::call` — fire
+        // on the already-polled handle, not a fresh unpolled clone.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
         Box::pin(async move {
             let result = inner.call(req).await;
 

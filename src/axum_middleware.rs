@@ -91,7 +91,14 @@ where
             .start_with_context(&tracer, &parent_cx);
 
         let cx = parent_cx.with_span(span);
-        let mut inner = self.inner.clone();
+
+        // `poll_ready` was called on `self.inner` before `call`, per the
+        // tower contract — some inner services track readiness per-handle
+        // (e.g. a `tower::buffer::Buffer`), so firing on a fresh unpolled
+        // clone can panic. Swap the clone into `self` for next time, and
+        // fire this request on the already-ready original handle.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
 
         Box::pin(async move {
             let mut response = inner.call(req).await?;
