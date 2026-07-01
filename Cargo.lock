@@ -778,6 +778,7 @@ version = "2.2.0"
 dependencies = [
  "axum",
  "hostname",
+ "http",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
