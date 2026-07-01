@@ -153,12 +153,47 @@ let _telemetry = Telemetry::builder("my-service")
     .init()?;
 ```
 
+## Continuous profiling
+
+Profiling is the fourth OTLP signal alongside traces, metrics, and logs
+(ADR platform/0201). It ships as an explicit, off-by-default feature:
+
+| Feature | Default | Description |
+|---|---|---|
+| `profiling` | ❌ | Enables `Telemetry::builder(...).with_profiling(endpoint)` |
+| `profiling-bridge-pyroscope-rs` | ❌ | Implies `profiling`; wires the pyroscope-rs exporter |
+
+```rust
+let _telemetry = otel_bootstrap::Telemetry::builder("my-service")
+    .with_profiling("http://localhost:4040")
+    .init()?;
+```
+
+**Single export plane.** There is no direct-to-backend pyroscope client
+path. `pyroscope-rs` hardcodes its own HTTP client with no TLS/identity
+hook, so profiles are pushed over plain HTTP to a **localhost-only
+SPIFFE-terminating sidecar** that carries the workload identity upstream
+(ADR platform/0203). The `with_profiling` endpoint is validated at init
+time to be loopback-only (`127.0.0.1`, `::1`, `localhost`, or a unix
+socket) — anything else is rejected. This bridge is a temporary,
+sunset-bound exception (ADR platform/0202, Tracks #40) pending a native Rust OTLP
+profiles exporter; every profile carries `trace_id`/`span_id` tags for
+correlation with the trace pillar.
+
+**SVID rotation requires a pod restart.** Like the rest of the telemetry
+channel, mTLS material for the profiling sidecar path is read once at
+`init()` time and held for the process lifetime. SPIFFE SVID rotation is
+not hot-reloaded into an already-running telemetry channel — a rotated
+SVID only takes effect on the next process start (pod restart). This is a
+standing platform constraint, not a profiling-specific bug.
+
 ## Examples
 
 - [`basic_setup`](examples/basic_setup.rs) — minimal init
 - [`shutdown_handling`](examples/shutdown_handling.rs) — explicit graceful flush
 - [`custom_config`](examples/custom_config.rs) — builder API with version, environment, sampler
 - [`axum_span_enricher`](examples/axum_span_enricher.rs) — axum + generic `EnrichSpan` enrichment
+- [`telemetry_profiling`](examples/telemetry_profiling.rs) — continuous profiling via the builder
 
 ## License
 

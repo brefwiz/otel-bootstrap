@@ -15,6 +15,10 @@ exporters:
   file/metrics:
     path: /var/lib/otel/metrics.jsonl
     flush_interval: 1s
+  otlp/profiles:
+    endpoint: pyroscope:4040
+    tls:
+      insecure: true
 
 service:
   extensions: [health_check]
@@ -25,3 +29,6 @@ service:
     metrics:
       receivers: [otlp]
       exporters: [file/metrics]
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp/profiles]
