@@ -60,6 +60,7 @@ let _telemetry = Telemetry::builder("my-service")
 | `grpc`        | ✅      | OTLP/gRPC transport via `tonic` |
 | `http`        | ❌      | OTLP/HTTP-protobuf transport via `reqwest` |
 | `axum`        | ❌      | `OtelTraceLayer` + `SpanEnricherLayer<T>` for axum servers |
+| `tonic-tracing` | ❌    | `grpc_client_layer()` + `grpc_server_layer()` for raw tonic gRPC clients/servers |
 | `testing`     | ❌      | In-memory exporters for unit tests |
 
 At least one of `grpc` or `http` must be enabled (enforced at compile time).

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-07-01
+
+### Added
+
+- **`tonic-tracing` feature** — `grpc_client_layer()` / `grpc_server_layer()`, tower `Layer`s that propagate W3C trace context (`traceparent`) over raw tonic gRPC clients/servers, mirroring the existing `axum_layer()` for HTTP. For services that hand-roll a tonic `Channel`/`Server` instead of going through an axum router.
+
 ## [2.2.0] — 2026-06-30
 
 ### Changed
