@@ -35,6 +35,9 @@ pub mod axum_middleware;
 #[cfg(feature = "tonic-tracing")]
 pub mod grpc_middleware;
 
+#[cfg(feature = "profiling")]
+pub mod profiling;
+
 pub mod log_bridge;
 pub mod span_enrichment;
 
@@ -175,6 +178,8 @@ pub struct TelemetryHandles {
     pub meter_provider: Option<SdkMeterProvider>,
     pub logger_provider: Option<SdkLoggerProvider>,
     shutdown_timeout: Duration,
+    #[cfg(feature = "profiling")]
+    pub profiling_handle: Option<profiling::ProfilingHandle>,
 }
 
 impl TelemetryHandles {
@@ -350,6 +355,8 @@ impl Telemetry {
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
+            #[cfg(feature = "profiling")]
+            pyroscope_endpoint: None,
         }
     }
 
@@ -380,6 +387,8 @@ impl Telemetry {
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
+            #[cfg(feature = "profiling")]
+            pyroscope_endpoint: None,
         }
     }
 }
@@ -421,6 +430,8 @@ pub struct TelemetryBuilder {
     #[cfg(feature = "grpc-mtls")]
     mtls: Option<MtlsMaterial>,
     propagated_span_fields: &'static [&'static str],
+    #[cfg(feature = "profiling")]
+    pyroscope_endpoint: Option<String>,
 }
 
 /// Type-erased adapter that applies an extra `MetricReader` to the
@@ -557,6 +568,29 @@ impl TelemetryBuilder {
     /// the providers may not have flushed all pending data.
     pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout;
+        self
+    }
+
+    /// Enable continuous profiling via pyroscope (requires the `profiling-bridge-pyroscope-rs` feature).
+    ///
+    /// The bridge pushes profiles over plain HTTP/loopback to a local SPIFFE-terminating
+    /// sidecar (or an already-mTLS'd endpoint reachable without client-side TLS material).
+    /// pyroscope-rs hardcodes its own HTTP client internally with no hook for custom
+    /// TLS/identity, so in-process mTLS is not possible; the sidecar carries the workload
+    /// identity upstream.
+    ///
+    /// The endpoint must target loopback only (127.0.0.1, ::1, localhost, or a unix socket)
+    /// per ADR platform/0203 AC1 — enforced at init time.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let _handles = otel_bootstrap::Telemetry::builder("my-service")
+    ///     .with_profiling("http://localhost:4040")
+    ///     .init()?;
+    /// ```
+    #[cfg(feature = "profiling")]
+    pub fn with_profiling(mut self, endpoint: &str) -> Self {
+        self.pyroscope_endpoint = Some(endpoint.to_string());
         self
     }
 
@@ -781,6 +815,16 @@ impl TelemetryBuilder {
             None
         };
 
+        // Profiling (optional)
+        #[cfg(feature = "profiling")]
+        let profiling_handle = if let Some(ref endpoint) = self.pyroscope_endpoint {
+            profiling::start_pyroscope_bridge(&service_name, endpoint)?
+        } else {
+            None
+        };
+        #[cfg(not(feature = "profiling"))]
+        let _profiling_handle: Option<()> = None;
+
         // Wire into tracing
         let otel_layer = tracing_opentelemetry::layer();
 
@@ -799,6 +843,9 @@ impl TelemetryBuilder {
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .with(tracing_subscriber::fmt::layer())
             .with(otel_layer);
+
+        #[cfg(feature = "profiling-bridge-pyroscope-rs")]
+        let registry = registry.with(crate::profiling::ProfilingTagLayer);
 
         if let Some(lp) = &logger_provider {
             if let Err(e) = registry
@@ -825,6 +872,8 @@ impl TelemetryBuilder {
             meter_provider,
             logger_provider,
             shutdown_timeout: self.shutdown_timeout,
+            #[cfg(feature = "profiling")]
+            profiling_handle,
         })
     }
 }
