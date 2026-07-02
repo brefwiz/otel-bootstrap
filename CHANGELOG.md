@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-07-02
+
+### Added
+
+- **`profiling` feature (off by default)** — continuous CPU/alloc profiling as a fourth OTLP-adjacent signal, via a `pyroscope-rs` direct-push bridge behind the distinct `profiling-bridge-pyroscope-rs` sub-feature (never co-equal with the eventual OTLP-profiles path). Every profile pushed via the bridge is tagged with the active span's `trace_id`/`span_id` for cross-linking in Grafana. `TelemetryBuilder::with_profiling(endpoint)` starts the bridge; disabled builds compile it out entirely (`cargo tree -e features` shows `pyroscope` only when the sub-feature is enabled).
+- **SPIFFE-mTLS transport via loopback sidecar (ADR platform/0203, platform/0205)** — `pyroscope-rs` hardcodes its own HTTP client with no hook for custom TLS/client-cert injection, so the bridge pushes plaintext to a local sidecar (never a routable address) which holds the workload's SPIFFE SVID and forwards over mTLS to the real Pyroscope backend. See `examples/telemetry_profiling.rs`.
+- Tracking issue `chore(profiling): remove pyroscope-rs bridge once Rust OTLP profiles exporter ships` (otel-bootstrap#40) stays open until `opentelemetry-rust` ships an OTLP profiles exporter — this bridge is a tracked, sunset-bound exception per platform/0202, not a permanent second export plane.
+
 ## [2.4.0] — 2026-07-01
 
 ### Fixed
