@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.6.0"
+version = "2.7.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -78,6 +78,10 @@ required-features = ["grpc", "axum"]
 name = "telemetry_profiling"
 required-features = ["profiling"]
 
+[[example]]
+name = "instrumented_port"
+required-features = ["testing"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
@@ -85,3 +89,4 @@ serde_yaml = "0.9"
 opentelemetry = { version = "0.32", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"

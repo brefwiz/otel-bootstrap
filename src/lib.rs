@@ -38,9 +38,11 @@ pub mod grpc_middleware;
 #[cfg(feature = "profiling")]
 pub mod profiling;
 
+pub mod instrumented_port;
 pub mod log_bridge;
 pub mod span_enrichment;
 
+pub use instrumented_port::{Instrumented, InstrumentedArc};
 pub use log_bridge::{
     PROPAGATED_SPAN_FIELDS, SpanLogAttrs, record_span_log_attr, record_span_log_attr_on,
 };

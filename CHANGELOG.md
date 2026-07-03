@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.7.0] — 2026-07-03
+
+### Added
+
+- **`Instrumented<P>` client-span wrapper for outbound hexagonal port calls** — `otel_bootstrap::Instrumented` wraps any outbound port trait object (a KMS provider, a secret store, any `#[async_trait]` port) so `Instrumented::call` opens an `otel.kind = "client"` span per call, tagged with `port.name`, `port.operation`, and an optional caller-supplied `port.provider_hint` — never an adapter-specific attribute hardcoded into otel-bootstrap. Plain delegation, not a proc-macro, so it works through `#[async_trait]` desugaring. Port registries (`KmsRegistry` and equivalents) should return `InstrumentedArc<dyn Port>` instead of a bare `Arc<dyn Port>`. See `examples/instrumented_port.rs`.
 
 ## [2.6.0] — 2026-07-03
 
