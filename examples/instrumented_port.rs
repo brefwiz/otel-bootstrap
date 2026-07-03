@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Wrapping a hexagonal outbound port with [`otel_bootstrap::Instrumented`] (ADR
-//! platform/0209 AC1).
+//! Wrapping a hexagonal outbound port with [`otel_bootstrap::Instrumented`].
 //!
 //! Shows the pattern a service like sealwiz-core follows for its `KmsProvider`
 //! port: define the port trait as usual, then implement it for
@@ -49,9 +48,9 @@ async fn main() {
     let handles = otel_bootstrap::Telemetry::testing("instrumented-port-example");
 
     let adapter: Arc<dyn GreetingPort> = Arc::new(StaticGreeter);
-    // Registries return `InstrumentedArc<dyn Port>` (platform/0209 AC1), never a
-    // bare `Arc<dyn Port>` — the provider hint is supplied by the caller, never
-    // hardcoded into otel-bootstrap.
+    // Registries return `InstrumentedArc<dyn Port>`, never a bare `Arc<dyn Port>` —
+    // the provider hint is supplied by the caller, never hardcoded into
+    // otel-bootstrap.
     let port: InstrumentedArc<dyn GreetingPort> =
         Instrumented::new(adapter, "GreetingPort", Some("static-greeter"));
 

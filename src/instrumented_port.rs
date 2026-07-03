@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Generic client-span wrapper for outbound hexagonal port calls (ADR platform/0209).
+//! Generic client-span wrapper for outbound hexagonal port calls.
 //!
 //! [`Instrumented<P>`] wraps any hexagonal outbound port (a KMS provider, a secret
 //! store, any `#[async_trait]` port trait object) so every call through it emits an
@@ -9,7 +9,7 @@
 //! here — the caller supplies a `provider_hint` string at construction time, and
 //! this module records only that generic hint plus the operation name.
 //!
-//! Per platform/0209, this is plain delegation, not a proc-macro: implement the
+//! This is plain delegation, not a proc-macro: implement the
 //! wrapped port trait for `Instrumented<P>` by hand, and call
 //! [`Instrumented::call`] inside each method to open the span around the delegated
 //! call. See `examples/instrumented_port.rs` for a full worked example.
@@ -41,7 +41,7 @@ use std::sync::Arc;
 pub const PORT_OPERATION: &str = "port.operation";
 /// Attribute key for the caller-supplied provider/adapter hint (e.g. `aws-kms`,
 /// `vault-transit`). Never populated with adapter-specific secrets (ARNs, project
-/// IDs) — those stay out of otel-bootstrap per platform/0209.
+/// IDs) — those stay out of otel-bootstrap.
 pub const PORT_PROVIDER_HINT: &str = "port.provider_hint";
 /// Attribute key for the port name (the trait being wrapped, e.g. `KmsProvider`).
 pub const PORT_NAME: &str = "port.name";
@@ -89,9 +89,11 @@ impl<P> Instrumented<P> {
     /// named `"{port_name}.{operation}"`, tagged `otel.kind = client` plus
     /// [`PORT_NAME`], [`PORT_OPERATION`], and — when present — [`PORT_PROVIDER_HINT`].
     ///
-    /// On `Err`, the span status is set to [`Status::error`] with the error's
-    /// `Display` output as the description; the error itself is still returned to
-    /// the caller unchanged.
+    /// On `Err`, the span status is set to [`Status::error`] with a fixed,
+    /// non-adapter-controlled description (the wrapped error's `Display` output is
+    /// never forwarded into telemetry, since adapter error types may embed
+    /// sensitive detail such as key identifiers or provider diagnostics); the
+    /// error itself is still returned to the caller unchanged.
     pub async fn call<'a, F, Fut, T, E>(&'a self, operation: &str, op: F) -> Result<T, E>
     where
         F: FnOnce(&'a P) -> Fut,
@@ -119,8 +121,8 @@ impl<P> Instrumented<P> {
         let fut = op(&self.inner);
         let result = fut.with_context(cx.clone()).await;
 
-        if let Err(err) = &result {
-            cx.span().set_status(Status::error(err.to_string()));
+        if result.is_err() {
+            cx.span().set_status(Status::error("port call failed"));
         }
 
         result
@@ -130,7 +132,7 @@ impl<P> Instrumented<P> {
 /// Convenience alias for the common shape of a port registry entry: an
 /// [`Instrumented`] wrapper around a shared, trait-object handle to a port `P`.
 ///
-/// Port registries (`KmsRegistry` and equivalents, per platform/0209 AC1) should
+/// Port registries (`KmsRegistry` and equivalents) should
 /// return `InstrumentedArc<dyn Port>` rather than a bare `Arc<dyn Port>`.
 pub type InstrumentedArc<P> = Instrumented<Arc<P>>;
 
