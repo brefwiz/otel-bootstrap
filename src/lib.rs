@@ -38,6 +38,7 @@ pub mod grpc_middleware;
 #[cfg(feature = "profiling")]
 pub mod profiling;
 
+pub mod instrumented_port;
 pub mod log_bridge;
 pub mod span_enrichment;
 
