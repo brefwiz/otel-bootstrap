@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `instrumented_port` module: `Instrumented<P>` generic wrapper emitting `otel.kind=client` spans around delegated port calls (no proc-macro).
+
 ## [2.6.0] — 2026-07-03
 
 ### Added
