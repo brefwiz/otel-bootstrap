@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Regression test (`tests/profiling_requires_writable_tmp.rs`) proving `with_profiling()`'s `pprof` backend needs a writable temp directory to start at all — the root cause of a brefwiz-spiffe production incident where a `FROM scratch` container image with no `/tmp` crash-looped on `create profiler error` the first time its boot sequence ever reached profiler startup. `ci-test` now also runs the `profiling-bridge-pyroscope-rs` feature's existing test suite (previously compiled by `ci-lint --all-features` but never actually executed locally).
+
 ## [2.5.0] — 2026-07-02
 
 ### Added

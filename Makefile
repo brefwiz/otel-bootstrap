@@ -90,9 +90,14 @@ ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 
 ci-test: ## CI: run unit tests with nextest
 	# Exclude `integration-tests` feature (needs a live collector on :4317).
-	# All other compile-time features are exercised by `ci-lint --all-features`.
+	# profiling-bridge-pyroscope-rs IS included here (unlike other
+	# feature-gated code, "exercised by ci-lint --all-features" only means
+	# compiled, not run) — its tests are lazy/no-network by design (pyroscope
+	# agent start() never eagerly connects), so there's no reason to leave
+	# them untested locally when real CI's shared rust.yml workflow already
+	# runs them via --all-features.
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
-		--features grpc,http,axum,testing,grpc-mtls
+		--features grpc,http,axum,testing,grpc-mtls,profiling-bridge-pyroscope-rs
 
 ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets
