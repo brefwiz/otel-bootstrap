@@ -91,7 +91,7 @@ pub(crate) fn start_pyroscope_bridge(
     service_name: &str,
     pyroscope_endpoint: &str,
 ) -> Result<Option<ProfilingHandle>, Box<dyn Error>> {
-    use pyroscope_pprofrs::{PprofConfig, pprof_backend};
+    use pyroscope::backend::{BackendConfig, PprofConfig, pprof_backend};
 
     // Validate endpoint targets loopback only (ADR platform/0203 AC1)
     validate_pyroscope_endpoint(pyroscope_endpoint)?;
@@ -102,10 +102,16 @@ pub(crate) fn start_pyroscope_bridge(
         return Ok(None);
     }
 
-    let agent = pyroscope::PyroscopeAgent::builder(pyroscope_endpoint, service_name)
-        .backend(pprof_backend(PprofConfig::new().sample_rate(100)))
-        .build()?
-        .start()?;
+    let agent = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
+        pyroscope_endpoint,
+        service_name,
+        100,
+        "pyroscope-rs",
+        env!("CARGO_PKG_VERSION"),
+        pprof_backend(PprofConfig { sample_rate: 100 }, BackendConfig::default()),
+    )
+    .build()?
+    .start()?;
 
     let (add_tag, remove_tag) = agent.tag_wrapper();
     PROFILING_TAG_FNS

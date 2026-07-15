@@ -111,11 +111,29 @@ impl<P> Instrumented<P> {
             attributes.push(KeyValue::new(PORT_PROVIDER_HINT, hint.to_string()));
         }
 
-        let span = tracer
-            .span_builder(span_name)
-            .with_kind(SpanKind::Client)
-            .with_attributes(attributes)
-            .start(&tracer);
+        // Parent on the current context only when it carries a *valid* span.
+        // `start(&tracer)` / `start_with_context(&tracer, &Context::current())`
+        // copies the parent's trace id verbatim — including an all-zero
+        // (invalid) one. On background / boot paths (e.g. a KMS unwrap outside
+        // any request trace) the current context can hold a span with an
+        // invalid SpanContext, yielding a 0-bit trace id that the collector's
+        // Tempo exporter rejects ("trace ids must be 128 bit, received 0 bits"),
+        // dropping the whole batch. Detaching to a fresh context when there is
+        // no valid parent makes the SDK mint a new root trace id instead.
+        let parent_cx = Context::current();
+        let span = if parent_cx.span().span_context().is_valid() {
+            tracer
+                .span_builder(span_name)
+                .with_kind(SpanKind::Client)
+                .with_attributes(attributes)
+                .start_with_context(&tracer, &parent_cx)
+        } else {
+            tracer
+                .span_builder(span_name)
+                .with_kind(SpanKind::Client)
+                .with_attributes(attributes)
+                .start_with_context(&tracer, &Context::new())
+        };
         let cx = Context::current_with_span(span);
 
         let fut = op(&self.inner);
@@ -238,6 +256,53 @@ mod tests {
             .iter()
             .any(|kv| kv.key.as_str() == PORT_PROVIDER_HINT);
         assert!(has_no_hint, "no provider hint attribute when none supplied");
+    }
+
+    #[tokio::test]
+    async fn call_mints_valid_trace_id_with_no_parent() {
+        let _guard = GLOBAL_TRACER_LOCK.lock().await;
+        let (provider, spans) = install_capturing_tracer();
+        opentelemetry::global::set_tracer_provider(provider.clone());
+
+        let wrapped = Instrumented::new(Adapter, "KmsProvider", None);
+        wrapped.call("unwrap", |inner| inner.unwrap()).await.ok();
+        provider.force_flush().unwrap();
+
+        let captured = spans.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(
+            captured[0].span_context.is_valid(),
+            "root span must carry a valid (non-zero) trace id"
+        );
+    }
+
+    // Regression: a KMS unwrap on a background / boot path runs with an invalid
+    // span context as current (no real request trace). The span must still get a
+    // fresh root trace id, not inherit the invalid parent's 0-bit id — a 0-bit
+    // trace id makes the collector's Tempo exporter reject the whole batch.
+    #[tokio::test]
+    async fn call_mints_fresh_trace_id_when_current_parent_is_invalid() {
+        use opentelemetry::trace::SpanContext;
+
+        let _guard = GLOBAL_TRACER_LOCK.lock().await;
+        let (provider, spans) = install_capturing_tracer();
+        opentelemetry::global::set_tracer_provider(provider.clone());
+
+        // Make an invalid span context current — reproduces the prod condition.
+        let invalid_parent = Context::new().with_remote_span_context(SpanContext::empty_context());
+        assert!(!invalid_parent.span().span_context().is_valid());
+        let _attach = invalid_parent.attach();
+
+        let wrapped = Instrumented::new(Adapter, "KmsProvider", None);
+        wrapped.call("unwrap", |inner| inner.unwrap()).await.ok();
+        provider.force_flush().unwrap();
+
+        let captured = spans.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(
+            captured[0].span_context.is_valid(),
+            "span must mint a fresh root trace id instead of inheriting the invalid parent's 0-bit id"
+        );
     }
 
     #[tokio::test]
