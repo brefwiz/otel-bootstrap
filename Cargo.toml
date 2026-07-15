@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.7.0"
+version = "2.7.1"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"

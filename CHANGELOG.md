@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] — 2026-07-15
+
+### Fixed
+
+- **`Instrumented::call` no longer emits spans with a 0-bit (invalid) trace id.** When a port call ran with an invalid span context as the current context (e.g. a KMS unwrap on a background / boot path outside any request trace), `start(&tracer)` inherited the invalid parent's all-zero trace id verbatim. Downstream, an OTLP collector's Tempo exporter rejects such spans (`trace ids must be 128 bit, received 0 bits`) and drops the **entire** batch — so one such producer can black out unrelated services' traces. `call` now parents on the current context only when it carries a valid span, and otherwise detaches to a fresh context so the SDK mints a new root trace id. Regression test covers the invalid-parent case.
+
 ## [2.7.0] — 2026-07-03
 
 ### Added
