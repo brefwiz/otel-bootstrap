@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.7.1"
+version = "2.8.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -79,6 +79,10 @@ required-features = ["profiling"]
 
 [[example]]
 name = "instrumented_port"
+required-features = ["testing"]
+
+[[example]]
+name = "spanned"
 required-features = ["testing"]
 
 [dev-dependencies]
