@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-07-17
+
+### Added
+
+- **`spanned` module: `Spanned`/`in_span` helper to replace `Span::enter()` across an `.await`.** `tracing::Span::enter()` returns a guard tied to a thread-local "current span" stack; holding it across a suspend point is unsound in async code — the executor can resume the task on another thread or interleave another task while the guard is "entered," corrupting the stack and producing detached/zero-trace-id spans downstream (rejected wholesale by Tempo's OTLP ingest, dropping unrelated co-batched spans along with the corrupted one). `otel_bootstrap::spanned::in_span(span, fut)` and `Spanned::new(span).run(fut)` run a future under a pre-built span via `tracing::Instrument`, giving callers that build attributed spans ahead of time (the `*_span(...)`-style helper shape) an await-safe alternative to manual `.enter()`.
+
 ## [2.7.1] — 2026-07-15
 
 ### Fixed
