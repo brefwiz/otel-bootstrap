@@ -30,6 +30,7 @@
 //! ```
 
 use opentelemetry::{
+    context::FutureExt,
     global,
     propagation::{Extractor, Injector},
     trace::{SpanKind, Status, TraceContextExt, Tracer},
@@ -160,7 +161,12 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
         Box::pin(async move {
-            let result = inner.call(req).await;
+            // See the matching comment in axum_middleware's OtelTraceService —
+            // without attaching this request's context, `Context::current()`
+            // inside the RPC handler (and anything using
+            // api-bones's `propagation::inject_current`) sees the empty root
+            // context regardless of what was extracted above.
+            let result = inner.call(req).with_context(cx.clone()).await;
 
             match &result {
                 Ok(resp) => {

@@ -14,6 +14,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response},
 };
 use opentelemetry::{
+    context::FutureExt,
     global,
     propagation::{Extractor, Injector},
     trace::{SpanKind, Status, TraceContextExt, Tracer},
@@ -101,7 +102,15 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
         Box::pin(async move {
-            let mut response = inner.call(req).await?;
+            // Without this, `Context::current()` inside the handler (and
+            // anything it calls, e.g. api-bones's `propagation::inject_current`)
+            // sees the empty root context, not this request's parent — every
+            // outbound call the handler makes injects a disconnected
+            // traceparent regardless of what was extracted above. `with_context`
+            // (not a bare `cx.attach()` guard) is required because the inner
+            // future can resume on a different tokio worker thread between
+            // polls, and thread-local attach doesn't survive that hop.
+            let mut response = inner.call(req).with_context(cx.clone()).await?;
 
             // Record HTTP status on the span.
             let status_code = response.status().as_u16();
