@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] — 2026-07-19
+
+### Fixed
+
+- **`axum_layer()`/`grpc_server_layer()` now attach the extracted parent context across the inner call, not just around it.** Both middlewares correctly extracted the incoming `traceparent` and built a properly-parented `SERVER` span for their own export — but never made that context ambient for the handler. `opentelemetry::Context::current()` inside a handler (and anything it calls — e.g. `api_bones::propagation::inject_current`, used by every brefwiz outbound client) saw the empty root context regardless of what was extracted, so any onward call the handler made injected a disconnected trace id. Confirmed as the root cause of the `quorumauth-origin`/`sealwiz-service -> brefwiz-spiffe` and downstream Tempo edges never linking past the first hop despite correct extraction/injection on both sides individually. Fixed via `opentelemetry::Context::FutureExt::with_context` around `inner.call(req)` — a bare `cx.attach()` guard would not survive the inner future resuming on a different tokio worker thread between polls. Regression test (`handler_observes_extracted_context_as_current`) asserts a handler's `Context::current()` carries the extracted parent's trace id.
+
 ## [2.8.0] — 2026-07-17
 
 ### Added
