@@ -57,7 +57,7 @@ use opentelemetry_sdk::{
     logs::SdkLoggerProvider,
     metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
     propagation::{BaggagePropagator, TraceContextPropagator},
-    trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider},
+    trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracer, SdkTracerProvider},
 };
 use opentelemetry_semantic_conventions::attribute::{
     DEPLOYMENT_ENVIRONMENT_NAME, HOST_NAME, PROCESS_PID, SERVICE_VERSION,
@@ -66,6 +66,12 @@ use std::error::Error;
 use std::time::Duration;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+fn tracing_bridge_tracer(provider: &SdkTracerProvider) -> SdkTracer {
+    use opentelemetry::trace::TracerProvider as _;
+
+    provider.tracer(env!("CARGO_PKG_NAME"))
+}
 
 /// Trace sampler configuration.
 ///
@@ -830,7 +836,11 @@ impl TelemetryBuilder {
         let _profiling_handle: Option<()> = None;
 
         // Wire into tracing
-        let otel_layer = tracing_opentelemetry::layer();
+        // `tracing_opentelemetry::layer()` defaults to a `NoopTracer`.  Bind
+        // the SDK tracer explicitly so tracing spans receive valid trace/span
+        // IDs and reach the configured exporter.
+        let otel_layer =
+            tracing_opentelemetry::layer().with_tracer(tracing_bridge_tracer(&tracer_provider));
 
         // `Vec::register_callsite()` on an empty Vec returns `Interest::never()`, which
         // propagates through the entire layer chain via `pick_interest()` and silently
@@ -1207,9 +1217,21 @@ pub fn grpc_server_layer() -> grpc_middleware::GrpcServerTraceLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::trace::{Span as _, Tracer as _};
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn tracing_bridge_uses_sdk_tracer() {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = tracing_bridge_tracer(&provider);
+        let span = tracer.start("bridge-regression");
+
+        assert!(span.span_context().is_valid());
+
+        provider.shutdown().expect("provider shutdown");
+    }
 
     #[test]
     fn resource_contains_all_attributes_when_provided() {
