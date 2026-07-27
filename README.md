@@ -45,13 +45,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For more control, use the builder:
 
 ```rust
-use otel_bootstrap::Telemetry;
+use otel_bootstrap::{LogFormat, Telemetry};
 
 let _telemetry = Telemetry::builder("my-service")
-    .version(env!("CARGO_PKG_VERSION"))
-    .environment("production")
+    .with_version(env!("CARGO_PKG_VERSION"))
+    .with_environment("production")
+    .with_log_filter("info,opentelemetry_sdk=warn")
+    .with_log_format(LogFormat::Json)
     .init()?;
 ```
+
+`with_log_filter` and `with_log_format` take precedence over environment-backed
+logging defaults, so typed configuration sources can configure logging without
+mutating process-global environment.
 
 ## Cargo features
 
