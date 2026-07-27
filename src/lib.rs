@@ -100,6 +100,16 @@ pub enum TraceSampler {
     ParentBased(Box<TraceSampler>),
 }
 
+/// Stdout log encoding installed by [`TelemetryBuilder`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LogFormat {
+    /// Human-readable log lines.
+    #[default]
+    Pretty,
+    /// One JSON object per line.
+    Json,
+}
+
 impl TraceSampler {
     /// Convert to the SDK [`Sampler`].
     fn into_sdk_sampler(self) -> Sampler {
@@ -360,6 +370,8 @@ impl Telemetry {
             metric_export_interval: None,
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            log_filter: None,
+            log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
             #[cfg(feature = "grpc-mtls")]
@@ -392,6 +404,8 @@ impl Telemetry {
             metric_export_interval: None,
             export_timeout: None,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            log_filter: None,
+            log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
             #[cfg(feature = "grpc-mtls")]
@@ -433,6 +447,8 @@ pub struct TelemetryBuilder {
     metric_export_interval: Option<Duration>,
     export_timeout: Option<Duration>,
     shutdown_timeout: Duration,
+    log_filter: Option<String>,
+    log_format: LogFormat,
     extra_layers: Vec<
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
@@ -452,6 +468,21 @@ type MeterProviderInstaller =
     Box<dyn FnOnce(MeterProviderBuilder) -> MeterProviderBuilder + Send + Sync>;
 
 impl TelemetryBuilder {
+    /// Set the tracing filter without mutating process-global environment.
+    ///
+    /// The directive is parsed during [`init`](Self::init). Invalid directives
+    /// fail initialization before exporters or the global subscriber are built.
+    pub fn with_log_filter(mut self, directive: impl Into<String>) -> Self {
+        self.log_filter = Some(directive.into());
+        self
+    }
+
+    /// Set stdout log encoding without mutating process-global environment.
+    pub fn with_log_format(mut self, format: LogFormat) -> Self {
+        self.log_format = format;
+        self
+    }
+
     /// Set the service version (maps to `service.version` resource attribute).
     pub fn with_version(mut self, version: &str) -> Self {
         self.service_version = Some(version.to_string());
@@ -691,6 +722,11 @@ impl TelemetryBuilder {
     /// handles.shutdown().ok();
     /// ```
     pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
+        let log_filter = match self.log_filter.as_deref() {
+            Some(directive) => tracing_subscriber::EnvFilter::try_new(directive)?,
+            None => tracing_subscriber::EnvFilter::from_default_env(),
+        };
+
         if let Some(interval) = self.metric_export_interval
             && interval.is_zero()
         {
@@ -836,12 +872,6 @@ impl TelemetryBuilder {
         let _profiling_handle: Option<()> = None;
 
         // Wire into tracing
-        // `tracing_opentelemetry::layer()` defaults to a `NoopTracer`.  Bind
-        // the SDK tracer explicitly so tracing spans receive valid trace/span
-        // IDs and reach the configured exporter.
-        let otel_layer =
-            tracing_opentelemetry::layer().with_tracer(tracing_bridge_tracer(&tracer_provider));
-
         // `Vec::register_callsite()` on an empty Vec returns `Interest::never()`, which
         // propagates through the entire layer chain via `pick_interest()` and silently
         // disables ALL tracing callsites for the process.  Guard against this by wrapping
@@ -852,33 +882,47 @@ impl TelemetryBuilder {
             Some(self.extra_layers)
         };
 
-        let registry = tracing_subscriber::registry()
-            .with(extra)
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .with(tracing_subscriber::fmt::layer())
-            .with(otel_layer);
+        macro_rules! install_subscriber {
+            ($fmt_layer:expr) => {{
+                // `tracing_opentelemetry::layer()` defaults to a `NoopTracer`.
+                // Construct inside each format branch so its subscriber type
+                // is inferred against that branch's concrete fmt layer.
+                let otel_layer = tracing_opentelemetry::layer()
+                    .with_tracer(tracing_bridge_tracer(&tracer_provider));
+                let registry = tracing_subscriber::registry()
+                    .with(extra)
+                    .with(log_filter)
+                    .with($fmt_layer)
+                    .with(otel_layer);
 
-        #[cfg(feature = "profiling-bridge-pyroscope-rs")]
-        let registry = registry.with(crate::profiling::ProfilingTagLayer);
+                #[cfg(feature = "profiling-bridge-pyroscope-rs")]
+                let registry = registry.with(crate::profiling::ProfilingTagLayer);
 
-        if let Some(lp) = &logger_provider {
-            if let Err(e) = registry
-                .with(crate::log_bridge::SpanAwareLogBridge::new(
-                    lp,
-                    self.propagated_span_fields,
-                ))
-                .try_init()
-            {
-                eprintln!(
-                    "otel-bootstrap: global tracing subscriber already installed — \
-                     OTLP log records will NOT be exported to the collector: {e}"
-                );
-            }
-        } else if let Err(e) = registry.try_init() {
-            eprintln!(
-                "otel-bootstrap: global tracing subscriber already installed — \
-                 OTLP telemetry will NOT be exported to the collector: {e}"
-            );
+                if let Some(lp) = &logger_provider {
+                    if let Err(e) = registry
+                        .with(crate::log_bridge::SpanAwareLogBridge::new(
+                            lp,
+                            self.propagated_span_fields,
+                        ))
+                        .try_init()
+                    {
+                        eprintln!(
+                            "otel-bootstrap: global tracing subscriber already installed — \
+                             OTLP log records will NOT be exported to the collector: {e}"
+                        );
+                    }
+                } else if let Err(e) = registry.try_init() {
+                    eprintln!(
+                        "otel-bootstrap: global tracing subscriber already installed — \
+                         OTLP telemetry will NOT be exported to the collector: {e}"
+                    );
+                }
+            }};
+        }
+
+        match self.log_format {
+            LogFormat::Pretty => install_subscriber!(tracing_subscriber::fmt::layer()),
+            LogFormat::Json => install_subscriber!(tracing_subscriber::fmt::layer().json()),
         }
 
         Ok(TelemetryHandles {
@@ -1588,6 +1632,38 @@ mod tests {
             matches!(builder.sampler, Some(TraceSampler::TraceIdRatio(r)) if (r - 0.5).abs() < f64::EPSILON)
         );
         assert!(!builder.metrics);
+    }
+
+    #[test]
+    fn builder_stores_programmatic_log_configuration() {
+        let builder = Telemetry::builder("test-svc")
+            .with_log_filter("info,opentelemetry_sdk=warn")
+            .with_log_format(LogFormat::Json);
+
+        assert_eq!(
+            builder.log_filter.as_deref(),
+            Some("info,opentelemetry_sdk=warn")
+        );
+        assert_eq!(builder.log_format, LogFormat::Json);
+    }
+
+    #[test]
+    fn init_rejects_invalid_programmatic_log_filter_before_provider_setup() {
+        let setup_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let setup_ran_in_closure = std::sync::Arc::clone(&setup_ran);
+
+        let error = Telemetry::builder("test-svc")
+            .with_log_filter("[")
+            .with_meter_provider_setup(move |builder| {
+                setup_ran_in_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+                builder
+            })
+            .init()
+            .err()
+            .expect("invalid filter must fail initialization");
+
+        assert!(error.to_string().contains("invalid filter directive"));
+        assert!(!setup_ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

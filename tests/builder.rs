@@ -5,7 +5,7 @@
 
 #![cfg(feature = "integration-tests")]
 
-use otel_bootstrap::{Telemetry, TraceSampler};
+use otel_bootstrap::{LogFormat, Telemetry, TraceSampler};
 use std::sync::{Arc, Mutex};
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -83,6 +83,19 @@ async fn builder_with_logs_disabled_produces_no_logger_provider() {
         .expect("builder init without logs should succeed");
 
     assert!(handles.logger_provider.is_none());
+    let _ = handles.shutdown();
+}
+
+#[tokio::test]
+async fn builder_with_programmatic_json_logging_initialises_successfully() {
+    let handles = Telemetry::builder("builder-json-logging")
+        .with_log_filter("info,opentelemetry_sdk=warn")
+        .with_log_format(LogFormat::Json)
+        .with_metrics(false)
+        .init()
+        .expect("builder init with programmatic JSON logging should succeed");
+
+    assert!(handles.meter_provider.is_none());
     let _ = handles.shutdown();
 }
 

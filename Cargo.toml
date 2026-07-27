@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.9.1"
+version = "2.10.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -43,7 +43,7 @@ opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio
 opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing = "0.1"
 opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
 hostname = "0.4"
