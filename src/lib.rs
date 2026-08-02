@@ -37,6 +37,7 @@ pub mod grpc_middleware;
 
 #[cfg(feature = "profiling")]
 pub mod profiling;
+mod runtime_metrics;
 
 pub mod instrumented_port;
 pub mod log_bridge;
@@ -374,6 +375,7 @@ impl Telemetry {
             log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
@@ -408,6 +410,7 @@ impl Telemetry {
             log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
@@ -453,6 +456,7 @@ pub struct TelemetryBuilder {
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
     extra_metric_readers: Vec<MeterProviderInstaller>,
+    runtime_metrics: bool,
     #[cfg(feature = "grpc-mtls")]
     mtls: Option<MtlsMaterial>,
     propagated_span_fields: &'static [&'static str],
@@ -536,6 +540,26 @@ impl TelemetryBuilder {
     /// Enable or disable metrics export (default: `true`).
     pub fn with_metrics(mut self, enabled: bool) -> Self {
         self.metrics = enabled;
+        self
+    }
+
+    /// Enable or disable the built-in process/runtime gauges (default: `true`).
+    ///
+    /// Covers process uptime and resident memory plus Tokio worker count, live
+    /// task count, global queue depth and scheduler delay — see
+    /// [`runtime_metrics`](crate::runtime_metrics) for what each answers.
+    ///
+    /// On by default because these are the instruments that distinguish "the
+    /// runtime never polled us" from "the thing we called was slow", and a
+    /// service that has to opt in generally has not, precisely when it matters.
+    /// They are registered on the `MeterProvider` this builder installs, so
+    /// they cost nothing when [`with_metrics(false)`](Self::with_metrics) is
+    /// set — no provider is created and this is never reached.
+    ///
+    /// Turn off for a process where the extra series are unwanted, e.g. a
+    /// short-lived CLI whose runtime state carries no operational meaning.
+    pub fn with_runtime_metrics(mut self, enabled: bool) -> Self {
+        self.runtime_metrics = enabled;
         self
     }
 
@@ -835,6 +859,13 @@ impl TelemetryBuilder {
             let mp = mp_builder.build();
 
             opentelemetry::global::set_meter_provider(mp.clone());
+
+            // Strictly after the provider is global: OpenTelemetry binds an
+            // instrument to whichever provider is installed when it is built,
+            // so registering any earlier would yield permanent no-ops.
+            if self.runtime_metrics {
+                crate::runtime_metrics::install();
+            }
 
             Some(mp)
         } else {
