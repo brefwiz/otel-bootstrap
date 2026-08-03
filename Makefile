@@ -180,7 +180,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		echo "    RUSTFLAGS would also apply to host build scripts and break them"; \
 		echo "    (quote/proc-macro2/libc failed to compile that way); CARGO_TARGET_*"; \
 		echo "    with an explicit --target keeps them off host artifacts."; \
-		env "CARGO_TARGET_$${tenv}_RUSTFLAGS=-C link-arg=-Wl,--start-group -C link-arg=-l:libunwind.a -C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:liblzma.a -C link-arg=-l:libz.a -C link-arg=-Wl,--end-group" \
+		env "CARGO_TARGET_$${tenv}_RUSTFLAGS=-C link-arg=-Wl,--whole-archive -C link-arg=-l:libunwind.a -C link-arg=-Wl,--no-whole-archive -C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:liblzma.a -C link-arg=-l:libz.a" \
 			cargo build --features profiling-memory-probe --bin heap-probe --target "$$triple"; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
