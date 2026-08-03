@@ -152,9 +152,13 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		rust:alpine sh -ec '\
 		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static >/dev/null; \
 		arch=$$(uname -m); \
-		echo "==> linking libunwind-$$arch (unw_backtrace lives in the arch-specific lib,"; \
-		echo "    not in libunwind itself, so tikv-jemalloc-sys -lunwind alone under-links)"; \
-		RUSTFLAGS="-C link-arg=-lunwind-$$arch" \
+		echo "==> linking libunwind-$$arch.a as a static archive"; \
+		echo "    unw_backtrace lives in the arch-specific lib, not in libunwind itself,"; \
+		echo "    so tikv-jemalloc-sys emitting -lunwind alone under-links. Naming the"; \
+		echo "    archive with -l: is required too: rustc places extra link args after"; \
+		echo "    -Wl,-Bdynamic, so a plain -lunwind-$$arch resolves to the .so, which a"; \
+		echo "    -static-pie link cannot use — it is skipped and the symbol stays undefined."; \
+		RUSTFLAGS="-C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:libunwind.a" \
 			cargo build --features profiling-memory-probe --bin heap-probe; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
