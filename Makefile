@@ -151,7 +151,11 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		-e MALLOC_CONF_PROD='$(MALLOC_CONF_PROD)' \
 		rust:alpine sh -ec '\
 		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static >/dev/null; \
-		cargo build --features profiling-memory-probe --bin heap-probe; \
+		arch=$$(uname -m); \
+		echo "==> linking libunwind-$$arch (unw_backtrace lives in the arch-specific lib,"; \
+		echo "    not in libunwind itself, so tikv-jemalloc-sys -lunwind alone under-links)"; \
+		RUSTFLAGS="-C link-arg=-lunwind-$$arch" \
+			cargo build --features profiling-memory-probe --bin heap-probe; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
 		_RJEM_MALLOC_CONF="$$MALLOC_CONF_PROD" /tmp/muslbuild/debug/heap-probe; \
