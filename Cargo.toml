@@ -47,7 +47,12 @@ profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend
 # which is how two releases shipped broken profiling. Separate from the feature
 # above so consumers never link an allocator they did not choose; CI runs
 # --all-features, so the probe is exercised there.
-profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator"]
+# tokio/rt-multi-thread is declared here, not borrowed: the probe is a [[bin]],
+# so it sees only the library's dependencies. dev-dependencies pull tokio with
+# "full", which makes the binary compile under `clippy --all-targets` and fail
+# under the plain `clippy --all-features` CI runs — the multi-thread runtime is
+# the whole point of the probe, since blocking_lock only panics on a worker.
+profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator", "tokio/rt-multi-thread"]
 
 [dependencies]
 opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
