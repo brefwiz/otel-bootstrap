@@ -210,6 +210,24 @@ impl TelemetryHandles {
     /// exporter can send remaining spans over gRPC. Safe to call multiple
     /// times — subsequent calls are no-ops.
     ///
+    /// **Best-effort.** A provider that cannot flush — collector unreachable,
+    /// export deadline exceeded — is logged at `warn` and shutdown continues
+    /// to the next one. Failing to deliver telemetry is not a failure of the
+    /// program that produced it, and a service must be able to exit cleanly
+    /// when its collector is down. This mirrors what [`Drop`] has always done;
+    /// the two paths previously disagreed, and `shutdown()` propagating was
+    /// the odd one out.
+    ///
+    /// The `Result` is retained for API compatibility and so a genuinely
+    /// fallible step could be surfaced later; today every provider error is
+    /// absorbed.
+    ///
+    /// Historically this returned `Ok` for metrics purely because nothing
+    /// registered instruments, so there was never anything to export. Once
+    /// real instruments exist, an unreachable collector turns every shutdown
+    /// into a 5-second timeout and an error — which is exactly the situation
+    /// this must not turn into a failure.
+    ///
     /// # Example
     /// ```no_run
     /// let handles = otel_bootstrap::init_telemetry("my-service").unwrap();
@@ -217,12 +235,18 @@ impl TelemetryHandles {
     /// handles.shutdown().expect("telemetry shutdown failed");
     /// ```
     pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
-        self.tracer_provider.shutdown()?;
-        if let Some(mp) = &self.meter_provider {
-            mp.shutdown()?;
+        if let Err(e) = self.tracer_provider.shutdown() {
+            tracing::warn!("tracer provider shutdown error: {e}");
         }
-        if let Some(lp) = &self.logger_provider {
-            lp.shutdown()?;
+        if let Some(mp) = &self.meter_provider
+            && let Err(e) = mp.shutdown()
+        {
+            tracing::warn!("meter provider shutdown error: {e}");
+        }
+        if let Some(lp) = &self.logger_provider
+            && let Err(e) = lp.shutdown()
+        {
+            tracing::warn!("logger provider shutdown error: {e}");
         }
         Ok(())
     }
