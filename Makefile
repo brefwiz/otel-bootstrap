@@ -114,6 +114,70 @@ ci-test: ## CI: run unit tests with nextest
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
 		--all-features -E 'not binary(e2e)'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Heap profiling on the target that actually ships
+#
+# The host `heap-probe` run under ci-test links glibc dynamically. Every
+# consuming service ships a STATICALLY LINKED MUSL binary (FROM scratch
+# images, `--target x86_64-unknown-linux-musl`), and that difference is not
+# cosmetic: jemalloc's `prof` walks a stack on each sampled allocation, and a
+# static musl binary has no working unwinder to walk it with.
+#
+# The cost of not testing this: brefwiz-spiffe 0.48.0, 0.49.0 and 0.49.1 all
+# shipped with heap profiling broken. 0.49.1 segfaulted (exit 139) in staging
+# with sampling armed from Rust — the configuration the host probe proves
+# "works" — because the host probe was never musl. Three releases, each caught
+# by a rollout rather than by CI.
+#
+# On Linux the musl binary runs natively. On a dev machine it runs through a
+# musl container; the arch differs from prod there but static-musl does not,
+# which is the variable under test.
+# ─────────────────────────────────────────────────────────────────────────────
+MUSL_ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
+MUSL_TARGET ?= $(MUSL_ARCH)-unknown-linux-musl
+MALLOC_CONF_PROD ?= prof:true,prof_active:false,lg_prof_sample:19
+# Force a container arch on a dev machine, e.g. MUSL_PLATFORM=linux/amd64 to
+# reproduce prod's exact target from an arm64 mac. Unset on Linux CI, which is
+# already x86_64 and runs the binary natively.
+MUSL_PLATFORM ?=
+MUSL_PLATFORM_FLAG := $(if $(MUSL_PLATFORM),--platform $(MUSL_PLATFORM),)
+
+ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped target)
+	@if [ "$$(uname -s)" = "Linux" ]; then \
+		echo "==> native musl run ($(MUSL_TARGET))"; \
+		rustup target add $(MUSL_TARGET) >/dev/null 2>&1 || true; \
+		$(CARGO) build --features profiling-memory-probe --bin heap-probe \
+			--target $(MUSL_TARGET); \
+		set +e; \
+		_RJEM_MALLOC_CONF='$(MALLOC_CONF_PROD)' \
+			./target/$(MUSL_TARGET)/debug/heap-probe; \
+		rc=$$?; \
+		set -e; \
+		if [ $$rc -ge 128 ]; then \
+			echo ""; \
+			echo "ERROR: heap profiling killed the process by signal $$((rc - 128)) on $(MUSL_TARGET)."; \
+			echo "  _RJEM_MALLOC_CONF=$(MALLOC_CONF_PROD)"; \
+			echo "  This is the target consuming services ship. jemalloc prof walks a"; \
+			echo "  stack per sampled allocation and a static musl binary has no working"; \
+			echo "  unwinder to walk it with. Do not ship heap profiling on this target."; \
+			exit $$rc; \
+		elif [ $$rc -ne 0 ]; then \
+			echo ""; \
+			echo "ERROR: heap probe exited $$rc on $(MUSL_TARGET) — profiling did not arm."; \
+			exit $$rc; \
+		fi; \
+	else \
+		echo "==> host is not Linux — running the musl probe in a container"; \
+		docker run --rm $(MUSL_PLATFORM_FLAG) -v "$$PWD":/src -w /src \
+			-v "$$HOME/.cargo/registry":/usr/local/cargo/registry \
+			-e CARGO_TARGET_DIR=/tmp/muslbuild \
+			-e _RJEM_MALLOC_CONF='$(MALLOC_CONF_PROD)' \
+			rust:alpine sh -ec \
+			'apk add --no-cache musl-dev gcc make bash perl >/dev/null; \
+			 cargo build --features profiling-memory-probe --bin heap-probe; \
+			 /tmp/muslbuild/debug/heap-probe'; \
+	fi
+
 ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets
 	$(CARGO) check --workspace --all-targets --all-features
