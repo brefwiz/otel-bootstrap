@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] — 2026-08-03
+
+### Fixed
+
+- Heap profiling now works on statically linked musl, the target every
+  consuming service ships. 2.13.0 fixed the activation panic but the
+  underlying link was still broken: jemalloc built with
+  `--enable-prof-libunwind` calls `unw_backtrace`, and on static musl that
+  needs more than `-lunwind`.
+
+  Three things, each found by a gate rather than reasoning. rustc bundles its
+  own LLVM libunwind for musl and it defines the same `_Unwind_*` symbols as
+  the system nongnu libunwind, so linking the system archive wholesale
+  collides on every one. `unw_backtrace` lives in the generic `libunwind.a`,
+  not the arch-specific one, and is demand-loaded — by the time the linker
+  reaches a `-l` appended at the end of the line, jemalloc's reference from an
+  earlier rlib has already gone unsatisfied. And the system libunwind is not
+  self-contained: built with minidebuginfo it needs liblzma and libz at static
+  link time, which a dynamic link hides behind DT_NEEDED.
+
+  A new build script derives all of it. It extracts the single archive member
+  defining `unw_backtrace`, republishes it as its own static library, and
+  emits `rustc-link-lib`/`rustc-link-search` — which propagate to the final
+  binary link, unlike raw link args. Consumers enabling
+  `profiling-memory-jemalloc` get a working link with no build changes, no
+  flags, and no knowledge of any of the above. Non-musl targets are untouched.
+
+### Added
+
+- `heap-probe` binary and `profiling-memory-probe` feature: a real-process
+  gate on the shipped target. brefwiz-spiffe shipped heap profiling broken in
+  0.48.0, 0.49.0 and 0.49.1 with green CI every time, because the failure is a
+  property of the process — jemalloc as global allocator, `_RJEM_MALLOC_CONF`
+  before `main`, activation inside a runtime, static musl — and no library
+  test binary has any of those.
+
+  It asserts a non-empty profile rather than a clean exit: 0.49.1 exited
+  cleanly and produced nothing at all. The same probe passes on glibc and on
+  aarch64 musl, so only x86_64 musl reproduces the crash — which is exactly
+  the combination nothing tested.
+
 ## [2.13.0] — 2026-08-03
 
 ### Fixed
