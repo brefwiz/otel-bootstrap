@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-08-03
+
+### Added
+
+- Process and Tokio runtime gauges, registered on the `MeterProvider` at init and on by default: `process.uptime`, `process.memory.resident`, `runtime.tokio.workers`, `runtime.tokio.alive_tasks`, `runtime.tokio.global_queue_depth`, `runtime.tokio.scheduler_delay`. `scheduler_delay` times a bare `yield_now()` round-trip, so comparing it against a service's own latency metrics separates a starved runtime from genuine downstream latency. Opt out with `TelemetryBuilder::with_runtime_metrics(false)`.
+- Static identity on profiles: `host_name`, `deployment_environment` and `service_version` are attached to every profile upload, matching the resource attributes already on logs and traces. Previously all replicas of a service collapsed into one unlabelled series.
+- `profiling-memory-jemalloc` feature adds a jemalloc heap-profiling agent alongside the CPU one, emitting `profile_type: "memory"`. Requires the consuming binary to install jemalloc as its global allocator, keep its symbol table, and run with `prof:true`; an unmet requirement warns and continues rather than failing startup.
+
+### Fixed
+
+- `TelemetryHandles::shutdown` no longer propagates provider flush failures. With no instruments registered there was nothing to export and it succeeded vacuously; with real instruments an unreachable collector turned every shutdown into a timeout and an error. Failing to deliver telemetry is not a failure of the program that produced it. Matches the existing `Drop` behaviour.
+
 ## [2.10.0] — 2026-07-27
 
 ### Added
