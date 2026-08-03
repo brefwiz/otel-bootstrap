@@ -37,6 +37,7 @@ pub mod grpc_middleware;
 
 #[cfg(feature = "profiling")]
 pub mod profiling;
+mod runtime_metrics;
 
 pub mod instrumented_port;
 pub mod log_bridge;
@@ -209,6 +210,24 @@ impl TelemetryHandles {
     /// exporter can send remaining spans over gRPC. Safe to call multiple
     /// times — subsequent calls are no-ops.
     ///
+    /// **Best-effort.** A provider that cannot flush — collector unreachable,
+    /// export deadline exceeded — is logged at `warn` and shutdown continues
+    /// to the next one. Failing to deliver telemetry is not a failure of the
+    /// program that produced it, and a service must be able to exit cleanly
+    /// when its collector is down. This mirrors what [`Drop`] has always done;
+    /// the two paths previously disagreed, and `shutdown()` propagating was
+    /// the odd one out.
+    ///
+    /// The `Result` is retained for API compatibility and so a genuinely
+    /// fallible step could be surfaced later; today every provider error is
+    /// absorbed.
+    ///
+    /// Historically this returned `Ok` for metrics purely because nothing
+    /// registered instruments, so there was never anything to export. Once
+    /// real instruments exist, an unreachable collector turns every shutdown
+    /// into a 5-second timeout and an error — which is exactly the situation
+    /// this must not turn into a failure.
+    ///
     /// # Example
     /// ```no_run
     /// let handles = otel_bootstrap::init_telemetry("my-service").unwrap();
@@ -216,12 +235,18 @@ impl TelemetryHandles {
     /// handles.shutdown().expect("telemetry shutdown failed");
     /// ```
     pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
-        self.tracer_provider.shutdown()?;
-        if let Some(mp) = &self.meter_provider {
-            mp.shutdown()?;
+        if let Err(e) = self.tracer_provider.shutdown() {
+            tracing::warn!("tracer provider shutdown error: {e}");
         }
-        if let Some(lp) = &self.logger_provider {
-            lp.shutdown()?;
+        if let Some(mp) = &self.meter_provider
+            && let Err(e) = mp.shutdown()
+        {
+            tracing::warn!("meter provider shutdown error: {e}");
+        }
+        if let Some(lp) = &self.logger_provider
+            && let Err(e) = lp.shutdown()
+        {
+            tracing::warn!("logger provider shutdown error: {e}");
         }
         Ok(())
     }
@@ -374,6 +399,7 @@ impl Telemetry {
             log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
@@ -408,6 +434,7 @@ impl Telemetry {
             log_format: LogFormat::default(),
             extra_layers: Vec::new(),
             extra_metric_readers: Vec::new(),
+            runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
@@ -453,6 +480,7 @@ pub struct TelemetryBuilder {
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
     extra_metric_readers: Vec<MeterProviderInstaller>,
+    runtime_metrics: bool,
     #[cfg(feature = "grpc-mtls")]
     mtls: Option<MtlsMaterial>,
     propagated_span_fields: &'static [&'static str],
@@ -536,6 +564,26 @@ impl TelemetryBuilder {
     /// Enable or disable metrics export (default: `true`).
     pub fn with_metrics(mut self, enabled: bool) -> Self {
         self.metrics = enabled;
+        self
+    }
+
+    /// Enable or disable the built-in process/runtime gauges (default: `true`).
+    ///
+    /// Covers process uptime and resident memory plus Tokio worker count, live
+    /// task count, global queue depth and scheduler delay — see
+    /// [`runtime_metrics`](crate::runtime_metrics) for what each answers.
+    ///
+    /// On by default because these are the instruments that distinguish "the
+    /// runtime never polled us" from "the thing we called was slow", and a
+    /// service that has to opt in generally has not, precisely when it matters.
+    /// They are registered on the `MeterProvider` this builder installs, so
+    /// they cost nothing when [`with_metrics(false)`](Self::with_metrics) is
+    /// set — no provider is created and this is never reached.
+    ///
+    /// Turn off for a process where the extra series are unwanted, e.g. a
+    /// short-lived CLI whose runtime state carries no operational meaning.
+    pub fn with_runtime_metrics(mut self, enabled: bool) -> Self {
+        self.runtime_metrics = enabled;
         self
     }
 
@@ -836,6 +884,13 @@ impl TelemetryBuilder {
 
             opentelemetry::global::set_meter_provider(mp.clone());
 
+            // Strictly after the provider is global: OpenTelemetry binds an
+            // instrument to whichever provider is installed when it is built,
+            // so registering any earlier would yield permanent no-ops.
+            if self.runtime_metrics {
+                crate::runtime_metrics::install();
+            }
+
             Some(mp)
         } else {
             None
@@ -864,7 +919,19 @@ impl TelemetryBuilder {
         // Profiling (optional)
         #[cfg(feature = "profiling")]
         let profiling_handle = if let Some(ref endpoint) = self.pyroscope_endpoint {
-            profiling::start_pyroscope_bridge(&service_name, endpoint)?
+            // Same identity the resource carries on logs and traces, so a
+            // profile can be joined to them by pod without translation.
+            // Derived here rather than asked of the caller: every value is
+            // already known to this builder.
+            let identity = profiling::ProfilingIdentity {
+                host_name: hostname::get()
+                    .ok()
+                    .and_then(|h| h.into_string().ok())
+                    .filter(|h| !h.is_empty()),
+                deployment_environment: self.deployment_environment.clone(),
+                service_version: self.service_version.clone(),
+            };
+            profiling::start_pyroscope_bridge(&service_name, endpoint, &identity)?
         } else {
             None
         };
@@ -1261,6 +1328,44 @@ pub fn grpc_server_layer() -> grpc_middleware::GrpcServerTraceLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The opt-out flag and the branch it controls.
+    #[test]
+    fn runtime_metrics_can_be_disabled() {
+        assert!(
+            Telemetry::builder("rm-default").runtime_metrics,
+            "runtime metrics are on by default"
+        );
+        assert!(
+            !Telemetry::builder("rm-off")
+                .with_runtime_metrics(false)
+                .runtime_metrics
+        );
+    }
+
+    /// `shutdown()` must absorb provider errors rather than propagate them.
+    ///
+    /// Shutting a provider down twice is the cheapest way to make one fail
+    /// deterministically — the second call reports that it is already shut
+    /// down. Doing it with a real exporter would need an unreachable collector
+    /// and a multi-second export deadline, and `force_flush` against a closed
+    /// port blocks outright rather than failing.
+    #[tokio::test]
+    async fn shutdown_absorbs_provider_errors() {
+        let handles = TelemetryHandles {
+            tracer_provider: SdkTracerProvider::builder().build(),
+            meter_provider: Some(SdkMeterProvider::builder().build()),
+            logger_provider: Some(SdkLoggerProvider::builder().build()),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            #[cfg(feature = "profiling")]
+            profiling_handle: None,
+        };
+
+        handles.shutdown().expect("first shutdown succeeds");
+        handles
+            .shutdown()
+            .expect("second shutdown absorbs the already-shut-down errors");
+    }
     use opentelemetry::trace::{Span as _, Tracer as _};
     use std::sync::Mutex;
 
