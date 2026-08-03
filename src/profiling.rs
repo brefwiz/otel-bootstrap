@@ -191,13 +191,35 @@ pub(crate) fn start_pyroscope_bridge(
 
 /// Start the jemalloc heap-profiling agent.
 ///
-/// Returns `Ok(None)` — never an error — when jemalloc profiling is not active
-/// at runtime. The backend requires the process to use jemalloc as its global
-/// allocator *and* to have been started with profiling enabled, e.g.
-/// `_RJEM_MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19`. Neither is
-/// visible at compile time, and a binary that merely links this feature must
-/// still boot normally without it: losing heap profiles is an observability
-/// regression, not a reason to fail service startup.
+/// Returns `Ok(None)` — never an error — when heap profiling is unavailable.
+/// The backend needs the process to use jemalloc as its global allocator and
+/// to have been built with profiling support; neither is visible at compile
+/// time, and a binary that merely links this feature must still boot normally
+/// without it. Losing heap profiles is an observability regression, not a
+/// reason to fail service startup.
+///
+/// ## Arm inactive, activate here
+///
+/// Consumers should set `_RJEM_MALLOC_CONF=prof:true,prof_active:false` and
+/// let this function turn sampling on. **Do not set `prof_active:true`.**
+///
+/// On x86_64 static musl, arming profiling at process start segfaults before
+/// `main` runs. Isolated on a real service image, same host, only the env var
+/// differing:
+///
+/// ```text
+/// prof:true,prof_active:true                  -> exit 139 (SIGSEGV)
+/// prof:true,prof_active:true,lg_prof_sample:30 -> exit 139 (SIGSEGV)
+/// prof:true,prof_active:false                 -> runs clean
+/// ```
+///
+/// `lg_prof_sample:30` samples roughly once per gigabyte and the probe never
+/// allocated near that, so the fault is in activation itself rather than in
+/// walking a sampled allocation's backtrace. Activating from here instead runs
+/// after the runtime is fully initialised.
+///
+/// Activation failure is non-fatal for the same reason as everything else in
+/// this path: CPU profiling continues, and the service boots.
 #[cfg(feature = "profiling-memory-jemalloc")]
 fn start_memory_agent(
     service_name: &str,
@@ -208,6 +230,43 @@ fn start_memory_agent(
     Box<dyn Error>,
 > {
     use pyroscope::backend::jemalloc::jemalloc_backend;
+
+    // Turn sampling on now, if the consumer armed prof but left it inactive.
+    // Wrapped for the same reason as the agent construction below: reading the
+    // mallctl panics rather than erroring when jemalloc is not the allocator.
+    let activation = std::panic::catch_unwind(|| match jemalloc_pprof::PROF_CTL.as_ref() {
+        None => Err("jemalloc profiling not compiled into this binary".to_owned()),
+        Some(ctl) => {
+            let mut guard = ctl.blocking_lock();
+            if guard.activated() {
+                // Already active — the consumer set prof_active:true. It works
+                // on some targets, so this is not an error, but it is the
+                // configuration that crashes on x86_64 musl, and a process
+                // that reaches here has already survived it.
+                return Ok(());
+            }
+            guard.activate().map_err(|e| e.to_string())
+        }
+    });
+    match activation {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(
+                error = %e,
+                "jemalloc heap profiling unavailable — continuing without it; \
+                 set _RJEM_MALLOC_CONF=prof:true,prof_active:false and use jemalloc \
+                 as the global allocator"
+            );
+            return Ok(None);
+        }
+        Err(_) => {
+            tracing::warn!(
+                "jemalloc heap profiling unavailable — this process is not using \
+                 jemalloc as its global allocator; continuing without it"
+            );
+            return Ok(None);
+        }
+    }
 
     // `catch_unwind`, not just error handling, because the failure is a panic.
     // `jemalloc_pprof`'s `JemallocProfCtl::get` reads the `opt.prof` mallctl

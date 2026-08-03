@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] — 2026-08-03
+
+### Fixed
+
+- Heap profiling now arms sampling from Rust after startup instead of requiring
+  `prof_active:true` in `_RJEM_MALLOC_CONF`. On x86_64 static musl, arming
+  profiling at process start segfaults before `main`: isolated on a real
+  service image with only the env var differing, `prof_active:true` exits 139
+  while `prof_active:false` runs clean, and it still crashes at
+  `lg_prof_sample:30` — which never samples in a short run — so the fault is
+  activation itself rather than walking a sampled backtrace. Consumers should
+  now set `prof:true,prof_active:false`; activation failure stays non-fatal and
+  leaves CPU profiling running.
+
 ## [2.11.0] — 2026-08-03
 
 ### Added
