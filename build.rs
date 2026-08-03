@@ -46,6 +46,20 @@ fn search_dirs(target: &str) -> Vec<PathBuf> {
     dirs
 }
 
+/// Whether this libunwind was built with minidebuginfo, which pulls in liblzma.
+///
+/// Detected from the archive itself rather than assumed: the same crate has to
+/// work against a distro libunwind (Alpine builds it with minidebuginfo) and
+/// against the CI image's own build (which disables it).
+fn needs_lzma(archive: &Path) -> bool {
+    Command::new("nm")
+        .arg("--undefined-only")
+        .arg(archive)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("lzma_"))
+        .unwrap_or(false)
+}
+
 /// Archive member that defines `unw_backtrace`, if any.
 fn member_defining_unw_backtrace(archive: &Path) -> Option<String> {
     let out = Command::new("nm")
@@ -83,7 +97,7 @@ fn main() {
 
     let Some((dir, archive)) = search_dirs(&target).into_iter().find_map(|d| {
         let a = d.join("libunwind.a");
-        a.is_file().then(|| (d, a))
+        a.is_file().then_some((d, a))
     }) else {
         // Not fatal: the link will fail with a clear undefined reference to
         // unw_backtrace, and saying so here points at the cause rather than
@@ -163,8 +177,15 @@ fn main() {
     println!("cargo:rustc-link-lib=static=unwind");
     println!("cargo:rustc-link-lib=static=unwind-{arch}");
 
-    // libunwind is built with minidebuginfo, so it reads LZMA-compressed
-    // .gnu_debugdata and needs these at static link time.
-    println!("cargo:rustc-link-lib=static=lzma");
-    println!("cargo:rustc-link-lib=static=z");
+    // Only when the libunwind in use was built WITH minidebuginfo, in which
+    // case it reads LZMA-compressed .gnu_debugdata and needs these at static
+    // link time. A dynamic link hides that behind DT_NEEDED; a static one does
+    // not. The CI image builds libunwind --disable-minidebuginfo precisely so
+    // this is unnecessary, but a distro-provided libunwind (Alpine's, say)
+    // does need it — so probe instead of hardcoding either answer.
+    for (lib, file) in [("lzma", "liblzma.a"), ("z", "libz.a")] {
+        if needs_lzma(&archive) && dir.join(file).is_file() {
+            println!("cargo:rustc-link-lib=static={lib}");
+        }
+    }
 }
