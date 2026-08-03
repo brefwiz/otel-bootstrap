@@ -166,7 +166,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		echo "    archive with -l: is required too: rustc places extra link args after"; \
 		echo "    -Wl,-Bdynamic, so a plain -lunwind-$$arch resolves to the .so, which a"; \
 		echo "    -static-pie link cannot use — it is skipped and the symbol stays undefined."; \
-		RUSTFLAGS="-C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:libunwind.a" \
+		RUSTFLAGS="-C link-arg=-Wl,--start-group -C link-arg=-l:libunwind.a -C link-arg=-l:libunwind-$$arch.a -C link-arg=-Wl,--end-group" \
 			cargo build --features profiling-memory-probe --bin heap-probe; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
