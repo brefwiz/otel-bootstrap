@@ -150,7 +150,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		-e CARGO_TARGET_DIR=/tmp/muslbuild \
 		-e MALLOC_CONF_PROD='$(MALLOC_CONF_PROD)' \
 		rust:alpine sh -ec '\
-		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static binutils >/dev/null; \
+		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static binutils xz-dev zlib-dev >/dev/null; \
 		arch=$$(uname -m); \
 		echo "==> what libunwind actually provides on musl"; \
 		ls -1 /usr/lib/libunwind*.a 2>/dev/null || echo "    (no libunwind archives)"; \
@@ -162,7 +162,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		done; \
 		echo "==> minimal static link test: can ANY link line resolve unw_backtrace?"; \
 		printf "#define UNW_LOCAL_ONLY\\n#include <libunwind.h>\\nint main(void){void*b[4];return unw_backtrace(b,4);}\\n" > /tmp/t.c; \
-		if gcc -static -o /tmp/t /tmp/t.c -lunwind 2>/tmp/t.err; then \
+		if gcc -static -o /tmp/t /tmp/t.c -lunwind -l:liblzma.a -lz 2>/tmp/t.err; then \
 			echo "    MINIMAL STATIC LINK OK — libunwind can satisfy it; the problem is how rustc composes the line"; \
 		else \
 			echo "    MINIMAL STATIC LINK FAILED — libunwind on static musl cannot satisfy unw_backtrace:"; \
@@ -174,7 +174,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		echo "    archive with -l: is required too: rustc places extra link args after"; \
 		echo "    -Wl,-Bdynamic, so a plain -lunwind-$$arch resolves to the .so, which a"; \
 		echo "    -static-pie link cannot use — it is skipped and the symbol stays undefined."; \
-		RUSTFLAGS="-C link-arg=-Wl,--start-group -C link-arg=-l:libunwind.a -C link-arg=-l:libunwind-$$arch.a -C link-arg=-Wl,--end-group" \
+		RUSTFLAGS="-C link-arg=-Wl,--start-group -C link-arg=-l:libunwind.a -C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:liblzma.a -C link-arg=-lz -C link-arg=-Wl,--end-group" \
 			cargo build --features profiling-memory-probe --bin heap-probe; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
