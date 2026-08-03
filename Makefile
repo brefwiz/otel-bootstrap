@@ -74,6 +74,19 @@ ci-format: ## CI: format check
 	$(CARGO) fmt --all -- --check
 
 ci-lint: ## CI: clippy strict (--all-features so feature-gated code is exercised)
+	# Both invocations, because they are not equivalent and CI runs the second.
+	#
+	# --all-targets builds tests and examples, so dev-dependencies enter feature
+	# unification. A [[bin]] that uses a feature only dev-dependencies enable
+	# then compiles here and fails in CI. That is not hypothetical: heap-probe
+	# needs tokio/rt-multi-thread, dev-deps take tokio with "full", and this
+	# target passed locally while CI's clippy failed with E0599 on
+	# Builder::new_multi_thread.
+	#
+	# The plain form is what CI runs and catches under-declared bin
+	# dependencies; --all-targets is stricter about coverage and catches lints
+	# in test code. Neither subsumes the other.
+	$(CARGO) clippy --workspace --all-features -- -D warnings
 	$(CARGO) clippy --workspace --all-features --all-targets -- -D warnings
 
 ci-lockfile-diff: ## CI: assert committed Cargo.lock matches resolution (ADR-0021)

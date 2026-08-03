@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.12.0"
+version = "2.13.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -41,6 +41,18 @@ profiling-bridge-pyroscope-rs = ["profiling", "dep:pyroscope"]
 # with prof:true,prof_active:true — neither of which this crate can arrange on
 # a consumer's behalf, hence a separate flag rather than on by default.
 profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend-jemalloc", "dep:jemalloc_pprof"]
+# Builds the `heap-probe` binary and its tests. Heap profiling can only be
+# validated in a process that installs jemalloc as its global allocator and has
+# _RJEM_MALLOC_CONF set before main — neither is true of a `cargo test` binary,
+# which is how two releases shipped broken profiling. Separate from the feature
+# above so consumers never link an allocator they did not choose; CI runs
+# --all-features, so the probe is exercised there.
+# tokio/rt-multi-thread is declared here, not borrowed: the probe is a [[bin]],
+# so it sees only the library's dependencies. dev-dependencies pull tokio with
+# "full", which makes the binary compile under `clippy --all-targets` and fail
+# under the plain `clippy --all-features` CI runs — the multi-thread runtime is
+# the whole point of the probe, since blocking_lock only panics on a worker.
+profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator", "tokio/rt-multi-thread"]
 
 [dependencies]
 opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
@@ -70,6 +82,8 @@ pyroscope = { version = "2.1", optional = true, features = ["backend-pprof-rs"] 
 # be activated after startup. Arming it via prof_active:true segfaults before
 # main on x86_64 musl; activating from Rust once the runtime is up does not.
 jemalloc_pprof = { version = "0.9", features = ["symbolize"], optional = true }
+# Only ever linked by the `heap-probe` binary (profiling-memory-probe).
+tikv-jemallocator = { version = "0.7", features = ["profiling"], optional = true }
 
 [[example]]
 name = "basic_setup"
@@ -107,3 +121,9 @@ opentelemetry = { version = "0.32", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
+
+# Real-process probe for heap profiling. Not shipped to consumers — gated behind
+# profiling-memory-probe, which nothing but CI and local validation enables.
+[[bin]]
+name = "heap-probe"
+required-features = ["profiling-memory-probe"]

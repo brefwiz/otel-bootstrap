@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "otel-bootstrap"
-version = "2.12.0"
+version = "2.13.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1346,6 +1346,7 @@ dependencies = [
  "pyroscope",
  "serde_json",
  "serde_yaml",
+ "tikv-jemallocator",
  "tokio",
  "tonic",
  "tower",
@@ -2241,6 +2242,16 @@ checksum = "1a2825c78386b4ae0314074867860ba9577875de945f05992c38815cbec327f0"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "249f09e49ab1609436f34c776e84231bead18d6a955f119f939bdc1d847561bd"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]

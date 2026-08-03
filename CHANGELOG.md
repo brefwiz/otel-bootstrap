@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-08-03
+
+### Fixed
+
+- Heap profiling never armed. 2.12.0 activated jemalloc sampling with
+  `blocking_lock()` on a `tokio::sync::Mutex`, and every caller reaches that
+  path from inside a runtime — `with_profiling()` runs during service
+  bootstrap. It panicked with "Cannot block the current thread from within a
+  runtime". The panic was caught, so the service booted, served traffic and
+  looked healthy while producing no heap profiles at all. Now `try_lock`,
+  which is correct rather than merely panic-free: activation happens once at
+  startup with nothing else holding the lock.
+
+### Added
+
+- `heap-probe` binary and `profiling-memory-probe` feature: a real-process
+  gate for heap profiling, run by `tests/heap_profiling_probe.rs`.
+
+  Two consecutive releases shipped broken heap profiling and both were caught
+  in staging, because what breaks is a property of the *process* — jemalloc
+  installed as the global allocator, `_RJEM_MALLOC_CONF` present before
+  `main`, activation attempted from inside a runtime — and a `cargo test`
+  binary has none of the three. The probe is a real binary run as a child
+  process under each `_RJEM_MALLOC_CONF` shape.
+
+  It asserts a **non-empty profile**, not a clean exit. A clean exit is
+  exactly what the 2.12.0 build produced. Verified by reinstating
+  `blocking_lock()`: the gate fails with `HEAP_PROBE_PANIC` and "heap
+  profiling did not produce a profile".
+
+  Also covers the 2.11.x defect — `prof_active:true` arming before `main`,
+  which segfaulted on x86_64 static musl — by failing if the process dies by
+  signal.
+
 ## [2.12.0] — 2026-08-03
 
 ### Fixed
