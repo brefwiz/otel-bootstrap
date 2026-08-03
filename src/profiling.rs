@@ -220,6 +220,72 @@ pub(crate) fn start_pyroscope_bridge(
 ///
 /// Activation failure is non-fatal for the same reason as everything else in
 /// this path: CPU profiling continues, and the service boots.
+/// Turn jemalloc sampling on, if the consumer armed `prof` but left it inactive.
+///
+/// Split out of [`start_memory_agent`] so it can be exercised directly by the
+/// `heap-probe` binary: this is the whole of what runs before any Pyroscope
+/// endpoint is involved, and it is where both shipped profiling defects lived.
+///
+/// The outer `Result` is `Err` when the call panicked rather than failed —
+/// reading the mallctl panics rather than erroring when jemalloc is not the
+/// process allocator.
+///
+/// ## Why not `blocking_lock`
+///
+/// `PROF_CTL` is a `tokio::sync::Mutex`, and callers reach this from inside a
+/// runtime — `with_profiling()` runs during service bootstrap. `blocking_lock`
+/// panics with "Cannot block the current thread from within a runtime", which
+/// 2.12.0 shipped: the panic was caught, heap profiling silently never armed,
+/// and the service looked healthy. `try_lock` is correct rather than merely
+/// panic-free, because activation happens once at startup with nothing else
+/// holding the lock; there is no contention to wait out.
+#[cfg(feature = "profiling-memory-jemalloc")]
+#[doc(hidden)]
+pub fn activate_jemalloc_sampling() -> SamplingActivation {
+    let caught = std::panic::catch_unwind(|| match jemalloc_pprof::PROF_CTL.as_ref() {
+        None => Err("jemalloc profiling not compiled into this binary".to_owned()),
+        Some(ctl) => {
+            let Ok(mut guard) = ctl.try_lock() else {
+                return Err(
+                    "jemalloc profiling control is held elsewhere; sampling not activated"
+                        .to_owned(),
+                );
+            };
+            if guard.activated() {
+                // Already active — the consumer set prof_active:true. It works
+                // on some targets, so this is not an error, but it is the
+                // configuration that crashes on x86_64 musl, and a process
+                // that reaches here has already survived it.
+                return Ok(());
+            }
+            guard.activate().map_err(|e| e.to_string())
+        }
+    });
+    match caught {
+        Ok(Ok(())) => SamplingActivation::Activated,
+        Ok(Err(e)) => SamplingActivation::Unavailable(e),
+        Err(_) => SamplingActivation::Panicked,
+    }
+}
+
+/// Outcome of [`activate_jemalloc_sampling`].
+///
+/// `Panicked` is a distinct variant rather than folded into `Unavailable`
+/// because the two call for different responses: `Unavailable` is a
+/// configuration the operator can correct, while `Panicked` means the process
+/// is not the one this code assumes it is running in.
+#[cfg(feature = "profiling-memory-jemalloc")]
+#[doc(hidden)]
+#[derive(Debug)]
+pub enum SamplingActivation {
+    /// Sampling is on.
+    Activated,
+    /// Sampling could not be turned on, with the reason.
+    Unavailable(String),
+    /// Reading the mallctl panicked — jemalloc is not this process's allocator.
+    Panicked,
+}
+
 #[cfg(feature = "profiling-memory-jemalloc")]
 fn start_memory_agent(
     service_name: &str,
@@ -231,26 +297,9 @@ fn start_memory_agent(
 > {
     use pyroscope::backend::jemalloc::jemalloc_backend;
 
-    // Turn sampling on now, if the consumer armed prof but left it inactive.
-    // Wrapped for the same reason as the agent construction below: reading the
-    // mallctl panics rather than erroring when jemalloc is not the allocator.
-    let activation = std::panic::catch_unwind(|| match jemalloc_pprof::PROF_CTL.as_ref() {
-        None => Err("jemalloc profiling not compiled into this binary".to_owned()),
-        Some(ctl) => {
-            let mut guard = ctl.blocking_lock();
-            if guard.activated() {
-                // Already active — the consumer set prof_active:true. It works
-                // on some targets, so this is not an error, but it is the
-                // configuration that crashes on x86_64 musl, and a process
-                // that reaches here has already survived it.
-                return Ok(());
-            }
-            guard.activate().map_err(|e| e.to_string())
-        }
-    });
-    match activation {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
+    match activate_jemalloc_sampling() {
+        SamplingActivation::Activated => {}
+        SamplingActivation::Unavailable(e) => {
             tracing::warn!(
                 error = %e,
                 "jemalloc heap profiling unavailable — continuing without it; \
@@ -259,7 +308,7 @@ fn start_memory_agent(
             );
             return Ok(None);
         }
-        Err(_) => {
+        SamplingActivation::Panicked => {
             tracing::warn!(
                 "jemalloc heap profiling unavailable — this process is not using \
                  jemalloc as its global allocator; continuing without it"
