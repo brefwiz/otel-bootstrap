@@ -150,8 +150,16 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		-e CARGO_TARGET_DIR=/tmp/muslbuild \
 		-e MALLOC_CONF_PROD='$(MALLOC_CONF_PROD)' \
 		rust:alpine sh -ec '\
-		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static >/dev/null; \
+		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static binutils >/dev/null; \
 		arch=$$(uname -m); \
+		echo "==> what libunwind actually provides on musl"; \
+		ls -1 /usr/lib/libunwind*.a 2>/dev/null || echo "    (no libunwind archives)"; \
+		for f in /usr/lib/libunwind*.a; do \
+			[ -e "$$f" ] || continue; \
+			n=$$(nm -g --defined-only "$$f" 2>/dev/null | grep -cw "unw_backtrace" || true); \
+			u=$$(nm -g --defined-only "$$f" 2>/dev/null | grep -c "_U.*_backtrace" || true); \
+			echo "    $$f: unw_backtrace=$$n  _U*_backtrace=$$u"; \
+		done; \
 		echo "==> linking libunwind-$$arch.a as a static archive"; \
 		echo "    unw_backtrace lives in the arch-specific lib, not in libunwind itself,"; \
 		echo "    so tikv-jemalloc-sys emitting -lunwind alone under-links. Naming the"; \
