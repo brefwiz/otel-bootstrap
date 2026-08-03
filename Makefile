@@ -180,7 +180,7 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		echo "    RUSTFLAGS would also apply to host build scripts and break them"; \
 		echo "    (quote/proc-macro2/libc failed to compile that way); CARGO_TARGET_*"; \
 		echo "    with an explicit --target keeps them off host artifacts."; \
-		echo "==> building via the crate's build script (no hand-tuned link flags)"; \
+		echo "==> building via the build script in this crate: no hand-tuned link flags"; \
 		echo "    build.rs extracts and republishes the unwind shim and emits the"; \
 		echo "    link directives itself, so this exercises exactly what a consumer"; \
 		echo "    gets from enabling the feature — nothing here that a service lacks."; \
