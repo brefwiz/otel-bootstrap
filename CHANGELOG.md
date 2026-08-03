@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.1] — 2026-08-03
+
+### Fixed
+
+- Missing musl libunwind is now a build failure instead of a silent one. The
+  build script emitted `cargo:warning` and carried on, but cargo SUPPRESSES
+  warnings from dependency build scripts — so the one message explaining the
+  problem was invisible to every consumer, and the build produced a binary that
+  segfaulted on its first sampled allocation.
+
+  That is not hypothetical. brefwiz-spiffe hit it a fourth time after the fix
+  had shipped: its CI image predated the libunwind rollout, this branch was
+  taken silently, and the gate caught a SIGSEGV that took an image-provenance
+  investigation to explain. The warning would have said so immediately if
+  anyone could have seen it.
+
+  Enabling heap profiling for musl without a usable libunwind is a broken
+  binary, not a degraded mode, so the build now refuses — naming the target,
+  every directory searched, and the three ways to resolve it.
+
 ## [2.14.0] — 2026-08-03
 
 ### Fixed
