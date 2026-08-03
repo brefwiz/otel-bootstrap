@@ -1328,6 +1328,44 @@ pub fn grpc_server_layer() -> grpc_middleware::GrpcServerTraceLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The opt-out flag and the branch it controls.
+    #[test]
+    fn runtime_metrics_can_be_disabled() {
+        assert!(
+            Telemetry::builder("rm-default").runtime_metrics,
+            "runtime metrics are on by default"
+        );
+        assert!(
+            !Telemetry::builder("rm-off")
+                .with_runtime_metrics(false)
+                .runtime_metrics
+        );
+    }
+
+    /// `shutdown()` must absorb provider errors rather than propagate them.
+    ///
+    /// Shutting a provider down twice is the cheapest way to make one fail
+    /// deterministically — the second call reports that it is already shut
+    /// down. Doing it with a real exporter would need an unreachable collector
+    /// and a multi-second export deadline, and `force_flush` against a closed
+    /// port blocks outright rather than failing.
+    #[tokio::test]
+    async fn shutdown_absorbs_provider_errors() {
+        let handles = TelemetryHandles {
+            tracer_provider: SdkTracerProvider::builder().build(),
+            meter_provider: Some(SdkMeterProvider::builder().build()),
+            logger_provider: Some(SdkLoggerProvider::builder().build()),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            #[cfg(feature = "profiling")]
+            profiling_handle: None,
+        };
+
+        handles.shutdown().expect("first shutdown succeeds");
+        handles
+            .shutdown()
+            .expect("second shutdown absorbs the already-shut-down errors");
+    }
     use opentelemetry::trace::{Span as _, Tracer as _};
     use std::sync::Mutex;
 
