@@ -104,10 +104,23 @@ pub(crate) fn install() {
 
 /// Register the Tokio runtime gauges.
 ///
-/// Each callback re-checks for a current runtime rather than capturing a
-/// handle once: `install` may run outside a runtime context, and observing
-/// nothing is the correct behaviour there.
+/// The runtime handle is captured **here**, at install time, and moved into
+/// each callback. Calling `Handle::try_current()` from inside a callback does
+/// not work: the SDK collects on its own thread, which is not inside the
+/// runtime context, so `try_current()` fails there and every one of these
+/// gauges silently reports nothing — the exact failure they exist to detect.
+///
+/// A `Handle` is cheap to clone and usable from any thread, so capturing once
+/// is both correct and cheaper than re-resolving per collection.
+///
+/// When there is no runtime at install time the gauges are not registered at
+/// all, rather than registered and permanently empty.
 fn install_tokio_gauges(meter: &Meter) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+
+    let h = handle.clone();
     meter
         .u64_observable_gauge("runtime.tokio.workers")
         .with_description(
@@ -115,24 +128,17 @@ fn install_tokio_gauges(meter: &Meter) {
              honours the cgroup CPU quota — a sub-1-core limit yields a single \
              worker, so any blocking call serialises the whole process.",
         )
-        .with_callback(|o| {
-            if let Some(v) = tokio_workers() {
-                o.observe(v, &[]);
-            }
-        })
+        .with_callback(move |o| o.observe(tokio_workers(&h), &[]))
         .build();
 
+    let h = handle.clone();
     meter
         .u64_observable_gauge("runtime.tokio.alive_tasks")
         .with_description(
             "Live Tokio tasks. A monotonic climb over a process's lifetime is \
              a task leak; flat rules tasks out as the thing that is growing.",
         )
-        .with_callback(|o| {
-            if let Some(v) = tokio_alive_tasks() {
-                o.observe(v, &[]);
-            }
-        })
+        .with_callback(move |o| o.observe(tokio_alive_tasks(&h), &[]))
         .build();
 
     meter
@@ -142,11 +148,7 @@ fn install_tokio_gauges(meter: &Meter) {
              depth under light load means the runtime is starved, which delays \
              every in-flight future including I/O.",
         )
-        .with_callback(|o| {
-            if let Some(v) = tokio_global_queue_depth() {
-                o.observe(v, &[]);
-            }
-        })
+        .with_callback(move |o| o.observe(tokio_global_queue_depth(&handle), &[]))
         .build();
 }
 
@@ -198,34 +200,25 @@ fn uptime_seconds(started: Instant) -> f64 {
     started.elapsed().as_secs_f64()
 }
 
-// The three Tokio readings below are named functions rather than closure
-// bodies so they can be asserted on directly. Driving them through the SDK
-// instead would mean attaching a real reader and forcing a collection, and a
-// `force_flush` against an unreachable collector blocks rather than failing —
-// a test that hangs indefinitely instead of reporting.
-//
-// Each returns `None` outside a runtime instead of `0`: a fabricated zero is
-// indistinguishable on a dashboard from a genuinely idle runtime.
+// The three Tokio readings below take an explicit `Handle` rather than calling
+// `Handle::try_current()` themselves. The SDK's collection runs off-runtime, so
+// resolving the handle at call time returns Err there and every gauge reports
+// nothing. Taking it as a parameter makes that impossible to reintroduce, and
+// lets the readings be asserted on directly.
 
-/// Tokio worker-thread count, or `None` outside a runtime.
-fn tokio_workers() -> Option<u64> {
-    tokio::runtime::Handle::try_current()
-        .ok()
-        .map(|h| h.metrics().num_workers() as u64)
+/// Tokio worker-thread count.
+fn tokio_workers(handle: &tokio::runtime::Handle) -> u64 {
+    handle.metrics().num_workers() as u64
 }
 
-/// Live Tokio task count, or `None` outside a runtime.
-fn tokio_alive_tasks() -> Option<u64> {
-    tokio::runtime::Handle::try_current()
-        .ok()
-        .map(|h| h.metrics().num_alive_tasks() as u64)
+/// Live Tokio task count.
+fn tokio_alive_tasks(handle: &tokio::runtime::Handle) -> u64 {
+    handle.metrics().num_alive_tasks() as u64
 }
 
-/// Tokio global-queue depth, or `None` outside a runtime.
-fn tokio_global_queue_depth() -> Option<u64> {
-    tokio::runtime::Handle::try_current()
-        .ok()
-        .map(|h| h.metrics().global_queue_depth() as u64)
+/// Tokio global-queue depth.
+fn tokio_global_queue_depth(handle: &tokio::runtime::Handle) -> u64 {
+    handle.metrics().global_queue_depth() as u64
 }
 
 /// Resident set size in bytes, or `None` where `/proc` is unavailable.
@@ -322,35 +315,45 @@ mod tests {
 
     #[tokio::test]
     async fn tokio_gauges_report_inside_a_runtime() {
-        assert!(tokio_workers().expect("workers inside a runtime") >= 1);
-        assert!(tokio_global_queue_depth().is_some());
+        let handle = tokio::runtime::Handle::current();
+        assert!(tokio_workers(&handle) >= 1);
 
         // The test's own future is driven by `block_on` and is not a spawned
-        // task, so `num_alive_tasks` is 0 until something is actually spawned.
-        // Spawn one and hold it, otherwise this asserts nothing about whether
-        // the gauge tracks tasks at all.
-        let before = tokio_alive_tasks().expect("task count inside a runtime");
+        // task, so the count is 0 until something is actually spawned. Spawn
+        // one and hold it, otherwise this asserts nothing about whether the
+        // gauge tracks tasks at all.
+        let before = tokio_alive_tasks(&handle);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let held = tokio::spawn(async move {
             let _ = rx.await;
         });
         tokio::task::yield_now().await;
         assert!(
-            tokio_alive_tasks().expect("task count inside a runtime") > before,
+            tokio_alive_tasks(&handle) > before,
             "spawning a task should raise the live-task count"
         );
         let _ = tx.send(());
         let _ = held.await;
+
+        let _ = tokio_global_queue_depth(&handle);
     }
 
-    #[test]
-    fn tokio_gauges_report_nothing_outside_a_runtime() {
-        // Observing nothing is the contract off-runtime; the callbacks must
-        // not fabricate a zero, which would be indistinguishable from a real
-        // idle runtime on a dashboard.
-        assert!(tokio_workers().is_none());
-        assert!(tokio_alive_tasks().is_none());
-        assert!(tokio_global_queue_depth().is_none());
+    /// A captured handle keeps working from a plain OS thread — which is the
+    /// situation the SDK's collector is in, and the reason the handle is
+    /// captured at install time rather than resolved per callback.
+    #[tokio::test]
+    async fn captured_handle_still_reports_off_runtime() {
+        let handle = tokio::runtime::Handle::current();
+        let workers = std::thread::spawn(move || {
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "this thread must be outside the runtime for the test to mean anything"
+            );
+            tokio_workers(&handle)
+        })
+        .join()
+        .expect("thread joins");
+        assert!(workers >= 1, "captured handle reports from another thread");
     }
 
     #[test]
