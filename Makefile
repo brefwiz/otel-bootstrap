@@ -160,6 +160,14 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 			u=$$(nm -g --defined-only "$$f" 2>/dev/null | grep -c "_U.*_backtrace" || true); \
 			echo "    $$f: unw_backtrace=$$n  _U*_backtrace=$$u"; \
 		done; \
+		echo "==> minimal static link test: can ANY link line resolve unw_backtrace?"; \
+		printf "#define UNW_LOCAL_ONLY\\n#include <libunwind.h>\\nint main(void){void*b[4];return unw_backtrace(b,4);}\\n" > /tmp/t.c; \
+		if gcc -static -o /tmp/t /tmp/t.c -lunwind 2>/tmp/t.err; then \
+			echo "    MINIMAL STATIC LINK OK — libunwind can satisfy it; the problem is how rustc composes the line"; \
+		else \
+			echo "    MINIMAL STATIC LINK FAILED — libunwind on static musl cannot satisfy unw_backtrace:"; \
+			sed -n "1,6p" /tmp/t.err | sed "s/^/      /"; \
+		fi; \
 		echo "==> linking libunwind-$$arch.a as a static archive"; \
 		echo "    unw_backtrace lives in the arch-specific lib, not in libunwind itself,"; \
 		echo "    so tikv-jemalloc-sys emitting -lunwind alone under-links. Naming the"; \
