@@ -180,16 +180,10 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 		echo "    RUSTFLAGS would also apply to host build scripts and break them"; \
 		echo "    (quote/proc-macro2/libc failed to compile that way); CARGO_TARGET_*"; \
 		echo "    with an explicit --target keeps them off host artifacts."; \
-		echo "==> extracting only the member that defines unw_backtrace"; \
-		echo "    rustc bundles its own LLVM libunwind for musl (self-contained/libunwind.a)"; \
-		echo "    which defines the same _Unwind_* symbols as Alpine nongnu libunwind, so"; \
-		echo "    --whole-archive collides on every one of them. Linking the single member"; \
-		echo "    that carries unw_backtrace takes what jemalloc needs and nothing that clashes."; \
-		mem=$$(nm --print-armap /usr/lib/libunwind.a 2>/dev/null | awk "/^unw_backtrace in /{print \$$3; exit}"); \
-		[ -n "$$mem" ] || { echo "    ERROR: no archive member defines unw_backtrace"; exit 1; }; \
-		echo "    member: $$mem"; \
-		mkdir -p /tmp/unwobj && (cd /tmp/unwobj && ar x /usr/lib/libunwind.a "$$mem"); \
-		env "CARGO_TARGET_$${tenv}_RUSTFLAGS=-C link-arg=/tmp/unwobj/$$mem -C link-arg=-l:libunwind-$$arch.a -C link-arg=-l:liblzma.a -C link-arg=-l:libz.a" \
+		echo "==> building via the crate's build script (no hand-tuned link flags)"; \
+		echo "    build.rs extracts and republishes the unwind shim and emits the"; \
+		echo "    link directives itself, so this exercises exactly what a consumer"; \
+		echo "    gets from enabling the feature — nothing here that a service lacks."; \
 			cargo build --features profiling-memory-probe --bin heap-probe --target "$$triple"; \
 		echo "==> target: $$(uname -m) static musl"; \
 		set +e; \
