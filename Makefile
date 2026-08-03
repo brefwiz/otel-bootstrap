@@ -125,8 +125,13 @@ ci-coverage: ## CI: coverage gate
 	#      stubs: add_attributes, set_timestamp, set_observed_timestamp) and
 	#      with_propagated_span_fields / from_env builder paths not exercised
 	#      by the integration-tests feature. Threshold bumped 30 → 110 for 2.2.0.
+	# --show-missing-lines so a failure names the uncovered lines instead of
+	# only a count. Without it the gate reports "N > threshold" and every
+	# diagnosis is guesswork against a per-file summary, which is how three
+	# separate wrong fixes got attempted here.
 	RUSTFLAGS="-D warnings" $(CARGO) llvm-cov nextest --workspace \
 		--features integration-tests,grpc-mtls \
+		--show-missing-lines \
 		--fail-uncovered-lines 110
 
 ci-e2e: ## CI: e2e tests (requires OTel Collector on :4317)
