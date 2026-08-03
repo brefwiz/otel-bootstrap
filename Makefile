@@ -89,15 +89,15 @@ ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 	@echo "$(GREEN)✅ All code quality checks passed$(RESET)"
 
 ci-test: ## CI: run unit tests with nextest
-	# Exclude `integration-tests` feature (needs a live collector on :4317).
-	# profiling-bridge-pyroscope-rs IS included here (unlike other
-	# feature-gated code, "exercised by ci-lint --all-features" only means
-	# compiled, not run) — its tests are lazy/no-network by design (pyroscope
-	# agent start() never eagerly connects), so there's no reason to leave
-	# them untested locally when real CI's shared rust.yml workflow already
-	# runs them via --all-features.
+	# Mirrors what CI actually runs: the shared rust.yml workflow tests with
+	# --all-features and skips only the e2e binary (which needs a live
+	# collector on :4317 and has its own job). A hand-listed feature subset
+	# here meant the jemalloc backend added by this branch was never compiled
+	# into the local test run, so the whole profiling test module passed
+	# locally and panicked in CI. A local gate that covers less than CI is
+	# worse than no local gate, because it is believed.
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
-		--features grpc,http,axum,testing,grpc-mtls,profiling-bridge-pyroscope-rs
+		--all-features -E 'not binary(e2e)'
 
 ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets

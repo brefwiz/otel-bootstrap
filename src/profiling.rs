@@ -209,23 +209,43 @@ fn start_memory_agent(
 > {
     use pyroscope::backend::jemalloc::jemalloc_backend;
 
-    let agent = match pyroscope::pyroscope::PyroscopeAgentBuilder::new(
-        pyroscope_endpoint,
-        service_name,
-        100,
-        "pyroscope-rs",
-        env!("CARGO_PKG_VERSION"),
-        jemalloc_backend(),
-    )
-    .tags(tags.to_vec())
-    .build()
-    {
-        Ok(agent) => agent,
-        Err(e) => {
+    // `catch_unwind`, not just error handling, because the failure is a panic.
+    // `jemalloc_pprof`'s `JemallocProfCtl::get` reads the `opt.prof` mallctl
+    // and `unwrap()`s it; when the process is not actually using jemalloc that
+    // read fails and the unwrap panics rather than returning an error we could
+    // match on. A binary that merely compiles this feature — every test binary
+    // in a consuming workspace, for one — links jemalloc_pprof without
+    // installing the allocator, so this is the normal case, not an edge one.
+    //
+    // Nothing here is left half-initialised by the unwind: the closure owns the
+    // backend and the partially-built agent, and both are dropped with it.
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pyroscope::pyroscope::PyroscopeAgentBuilder::new(
+            pyroscope_endpoint,
+            service_name,
+            100,
+            "pyroscope-rs",
+            env!("CARGO_PKG_VERSION"),
+            jemalloc_backend(),
+        )
+        .tags(tags.to_vec())
+        .build()
+    }));
+
+    let agent = match built {
+        Ok(Ok(agent)) => agent,
+        Ok(Err(e)) => {
             tracing::warn!(
                 error = %e,
                 "jemalloc heap profiling unavailable — continuing without it; \
                  check the global allocator is jemalloc and prof:true,prof_active:true is set"
+            );
+            return Ok(None);
+        }
+        Err(_) => {
+            tracing::warn!(
+                "jemalloc heap profiling unavailable — this process is not using \
+                 jemalloc as its global allocator; continuing without it"
             );
             return Ok(None);
         }
