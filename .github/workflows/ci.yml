@@ -42,15 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-
-      # jemalloc-sys compiles jemalloc from C, so it needs a musl C toolchain;
-      # rustc's self-contained linking alone is not enough here.
-      - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
+      # No host toolchain setup: the target runs everything inside a musl
+      # container, which is also where libunwind built against musl comes from.
+      # Same environment here and on a dev machine, so a green here is not a
+      # property of the runner.
       - name: Heap probe on static musl
         run: make ci-heap-probe-musl
 

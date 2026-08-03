@@ -1346,6 +1346,7 @@ dependencies = [
  "pyroscope",
  "serde_json",
  "serde_yaml",
+ "tikv-jemalloc-sys",
  "tikv-jemallocator",
  "tokio",
  "tonic",

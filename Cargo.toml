@@ -40,7 +40,17 @@ profiling-bridge-pyroscope-rs = ["profiling", "dep:pyroscope"]
 # global allocator (tikv-jemallocator with the `profiling` feature) and to run
 # with prof:true,prof_active:true — neither of which this crate can arrange on
 # a consumer's behalf, hence a separate flag rather than on by default.
-profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend-jemalloc", "dep:jemalloc_pprof"]
+# tikv-jemalloc-sys/profiling_libunwind is load-bearing, not a tuning knob.
+# The `profiling` feature alone configures jemalloc with --enable-prof, which
+# leaves it unwinding through libgcc's _Unwind_Backtrace. A statically linked
+# musl binary — what every consumer ships — has no working unwind path there,
+# so the first sampled allocation segfaults. Verified on the shipped target:
+# x86_64-unknown-linux-musl dies with SIGSEGV without this, and the same probe
+# passes on glibc and on aarch64 musl, which is why it went unnoticed through
+# three releases. --enable-prof-libunwind uses libunwind instead, which
+# supports musl. Consumers linking this feature must have libunwind available
+# to the musl build.
+profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend-jemalloc", "dep:jemalloc_pprof", "dep:tikv-jemalloc-sys", "tikv-jemalloc-sys/profiling_libunwind"]
 # Builds the `heap-probe` binary and its tests. Heap profiling can only be
 # validated in a process that installs jemalloc as its global allocator and has
 # _RJEM_MALLOC_CONF set before main — neither is true of a `cargo test` binary,
@@ -84,6 +94,9 @@ pyroscope = { version = "2.1", optional = true, features = ["backend-pprof-rs"] 
 jemalloc_pprof = { version = "0.9", features = ["symbolize"], optional = true }
 # Only ever linked by the `heap-probe` binary (profiling-memory-probe).
 tikv-jemallocator = { version = "0.7", features = ["profiling"], optional = true }
+# Not called directly — pulled in so profiling_libunwind can be turned on for
+# the whole graph (see profiling-memory-jemalloc above).
+tikv-jemalloc-sys = { version = "0.7", optional = true }
 
 [[example]]
 name = "basic_setup"
