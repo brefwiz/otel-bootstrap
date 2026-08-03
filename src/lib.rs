@@ -864,7 +864,19 @@ impl TelemetryBuilder {
         // Profiling (optional)
         #[cfg(feature = "profiling")]
         let profiling_handle = if let Some(ref endpoint) = self.pyroscope_endpoint {
-            profiling::start_pyroscope_bridge(&service_name, endpoint)?
+            // Same identity the resource carries on logs and traces, so a
+            // profile can be joined to them by pod without translation.
+            // Derived here rather than asked of the caller: every value is
+            // already known to this builder.
+            let identity = profiling::ProfilingIdentity {
+                host_name: hostname::get()
+                    .ok()
+                    .and_then(|h| h.into_string().ok())
+                    .filter(|h| !h.is_empty()),
+                deployment_environment: self.deployment_environment.clone(),
+                service_version: self.service_version.clone(),
+            };
+            profiling::start_pyroscope_bridge(&service_name, endpoint, &identity)?
         } else {
             None
         };

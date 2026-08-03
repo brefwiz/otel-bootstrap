@@ -36,6 +36,11 @@ tonic-tracing = ["dep:tonic", "dep:tower", "dep:http"]
 profiling = []
 # Temporary bridge pending native Rust OTLP profiles exporter (Tracks #40, ADR platform/0202)
 profiling-bridge-pyroscope-rs = ["profiling", "dep:pyroscope"]
+# Heap profiling via jemalloc. Requires the binary to set jemalloc as its
+# global allocator (tikv-jemallocator with the `profiling` feature) and to run
+# with prof:true,prof_active:true — neither of which this crate can arrange on
+# a consumer's behalf, hence a separate flag rather than on by default.
+profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend-jemalloc"]
 
 [dependencies]
 opentelemetry = { version = "0.32", features = ["metrics", "logs"] }

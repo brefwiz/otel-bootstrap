@@ -45,17 +45,77 @@ fn validate_pyroscope_endpoint(endpoint: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Profiling bridge handle. Owns the active profiling agent and ensures
+/// Identity attached to every profile this process uploads.
+///
+/// Pyroscope stores a profile series per tag set. Without these, every replica
+/// of a service collapses into one unlabelled series: you cannot tell two pods
+/// apart, cannot follow one pod across a restart, and cannot line a profile up
+/// against the logs and metrics for the same instance.
+///
+/// Field names deliberately match the resource attributes exported on logs and
+/// traces (`host_name`, `deployment_environment`, `service_version`) so the
+/// same value joins across all three signals without translation.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProfilingIdentity {
+    /// Host name — the pod name under Kubernetes.
+    pub host_name: Option<String>,
+    /// Deployment environment, e.g. `prod`.
+    pub deployment_environment: Option<String>,
+    /// Service version.
+    pub service_version: Option<String>,
+}
+
+#[cfg(feature = "profiling-bridge-pyroscope-rs")]
+impl ProfilingIdentity {
+    /// Flatten to the `(key, value)` pairs the pyroscope builder takes.
+    ///
+    /// Absent fields are omitted rather than emitted empty: an empty tag value
+    /// still forks the series, which is the precise problem this exists to
+    /// avoid.
+    fn tag_pairs(&self) -> Vec<(&'static str, &str)> {
+        let mut pairs = Vec::new();
+        if let Some(host) = self.host_name.as_deref().filter(|s| !s.is_empty()) {
+            pairs.push(("host_name", host));
+        }
+        if let Some(env) = self
+            .deployment_environment
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            pairs.push(("deployment_environment", env));
+        }
+        if let Some(version) = self.service_version.as_deref().filter(|s| !s.is_empty()) {
+            pairs.push(("service_version", version));
+        }
+        pairs
+    }
+}
+
+/// Profiling bridge handle. Owns the active profiling agents and ensures
 /// graceful shutdown on drop.
 pub struct ProfilingHandle {
+    /// CPU profiler (`pprof` backend).
     #[cfg(feature = "profiling-bridge-pyroscope-rs")]
     agent: Option<pyroscope::PyroscopeAgent<pyroscope::pyroscope::PyroscopeAgentRunning>>,
+    /// Heap profiler (jemalloc backend).
+    ///
+    /// A separate agent because `PyroscopeAgentBuilder` takes exactly one
+    /// backend, and the two sample different things: `pprof` samples on-CPU
+    /// time, jemalloc samples allocations. A process stalled off-CPU produces
+    /// an empty CPU profile while still allocating, so the heap agent is the
+    /// one that has anything to say in that case.
+    #[cfg(feature = "profiling-memory-jemalloc")]
+    memory_agent: Option<pyroscope::PyroscopeAgent<pyroscope::pyroscope::PyroscopeAgentRunning>>,
 }
 
 #[cfg(feature = "profiling-bridge-pyroscope-rs")]
 impl Drop for ProfilingHandle {
     fn drop(&mut self) {
         if let Some(agent) = self.agent.take() {
+            let _ = agent.stop();
+        }
+        #[cfg(feature = "profiling-memory-jemalloc")]
+        if let Some(agent) = self.memory_agent.take() {
             let _ = agent.stop();
         }
     }
@@ -90,17 +150,20 @@ static PROFILING_STARTED: OnceLock<()> = OnceLock::new();
 pub(crate) fn start_pyroscope_bridge(
     service_name: &str,
     pyroscope_endpoint: &str,
+    identity: &ProfilingIdentity,
 ) -> Result<Option<ProfilingHandle>, Box<dyn Error>> {
     use pyroscope::backend::{BackendConfig, PprofConfig, pprof_backend};
 
     // Validate endpoint targets loopback only (ADR platform/0203 AC1)
     validate_pyroscope_endpoint(pyroscope_endpoint)?;
 
-    // Only one profiling agent may run per process (the `pprof` backend holds
-    // a single process-wide profiler guard); ignore subsequent start attempts.
+    // The `pprof` backend holds a single process-wide profiler guard, so the
+    // bridge starts at most once; ignore subsequent start attempts.
     if PROFILING_STARTED.set(()).is_err() {
         return Ok(None);
     }
+
+    let tags = identity.tag_pairs();
 
     let agent = pyroscope::pyroscope::PyroscopeAgentBuilder::new(
         pyroscope_endpoint,
@@ -110,6 +173,7 @@ pub(crate) fn start_pyroscope_bridge(
         env!("CARGO_PKG_VERSION"),
         pprof_backend(PprofConfig { sample_rate: 100 }, BackendConfig::default()),
     )
+    .tags(tags.clone())
     .build()?
     .start()?;
 
@@ -118,7 +182,65 @@ pub(crate) fn start_pyroscope_bridge(
         .set((Box::new(add_tag), Box::new(remove_tag)))
         .ok();
 
-    Ok(Some(ProfilingHandle { agent: Some(agent) }))
+    Ok(Some(ProfilingHandle {
+        agent: Some(agent),
+        #[cfg(feature = "profiling-memory-jemalloc")]
+        memory_agent: start_memory_agent(service_name, pyroscope_endpoint, &tags)?,
+    }))
+}
+
+/// Start the jemalloc heap-profiling agent.
+///
+/// Returns `Ok(None)` — never an error — when jemalloc profiling is not active
+/// at runtime. The backend requires the process to use jemalloc as its global
+/// allocator *and* to have been started with profiling enabled, e.g.
+/// `_RJEM_MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19`. Neither is
+/// visible at compile time, and a binary that merely links this feature must
+/// still boot normally without it: losing heap profiles is an observability
+/// regression, not a reason to fail service startup.
+#[cfg(feature = "profiling-memory-jemalloc")]
+fn start_memory_agent(
+    service_name: &str,
+    pyroscope_endpoint: &str,
+    tags: &[(&'static str, &str)],
+) -> Result<
+    Option<pyroscope::PyroscopeAgent<pyroscope::pyroscope::PyroscopeAgentRunning>>,
+    Box<dyn Error>,
+> {
+    use pyroscope::backend::jemalloc::jemalloc_backend;
+
+    let agent = match pyroscope::pyroscope::PyroscopeAgentBuilder::new(
+        pyroscope_endpoint,
+        service_name,
+        100,
+        "pyroscope-rs",
+        env!("CARGO_PKG_VERSION"),
+        jemalloc_backend(),
+    )
+    .tags(tags.to_vec())
+    .build()
+    {
+        Ok(agent) => agent,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "jemalloc heap profiling unavailable — continuing without it; \
+                 check the global allocator is jemalloc and prof:true,prof_active:true is set"
+            );
+            return Ok(None);
+        }
+    };
+
+    match agent.start() {
+        Ok(running) => {
+            tracing::info!("jemalloc heap profiling started");
+            Ok(Some(running))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "jemalloc heap profiling failed to start — continuing without it");
+            Ok(None)
+        }
+    }
 }
 
 /// No-op bridge for when profiling is enabled but the pyroscope feature is not.
@@ -126,6 +248,7 @@ pub(crate) fn start_pyroscope_bridge(
 pub(crate) fn start_pyroscope_bridge(
     _service_name: &str,
     _pyroscope_endpoint: &str,
+    _identity: &ProfilingIdentity,
 ) -> Result<Option<ProfilingHandle>, Box<dyn Error>> {
     Ok(None)
 }
@@ -175,7 +298,11 @@ mod tests {
 
     #[test]
     fn start_bridge_with_nonexistent_server() {
-        let result = start_pyroscope_bridge("test-svc", "http://localhost:4040");
+        let result = start_pyroscope_bridge(
+            "test-svc",
+            "http://localhost:4040",
+            &ProfilingIdentity::default(),
+        );
         assert!(
             result.is_ok(),
             "pyroscope agent start() is lazy and does not eagerly connect"
@@ -187,9 +314,17 @@ mod tests {
 
     #[test]
     fn start_bridge_multiple_times_ignores_second() {
-        let result1 = start_pyroscope_bridge("test-svc-1", "http://localhost:4040");
+        let result1 = start_pyroscope_bridge(
+            "test-svc-1",
+            "http://localhost:4040",
+            &ProfilingIdentity::default(),
+        );
         assert!(result1.is_ok());
-        let result2 = start_pyroscope_bridge("test-svc-2", "http://localhost:4041");
+        let result2 = start_pyroscope_bridge(
+            "test-svc-2",
+            "http://localhost:4041",
+            &ProfilingIdentity::default(),
+        );
         assert!(result2.is_ok());
         // Second call is a no-op: the `pprof` backend only supports one
         // process-wide profiler guard, so the bridge returns `Ok(None)`.
@@ -249,7 +384,11 @@ mod tests_no_bridge {
 
     #[test]
     fn start_bridge_returns_none() {
-        let result = start_pyroscope_bridge("test-svc", "http://localhost:4040");
+        let result = start_pyroscope_bridge(
+            "test-svc",
+            "http://localhost:4040",
+            &ProfilingIdentity::default(),
+        );
         assert!(result.is_ok());
         if let Ok(handle) = result {
             assert!(handle.is_none());
