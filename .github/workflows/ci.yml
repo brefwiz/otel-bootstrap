@@ -20,6 +20,35 @@ jobs:
       run-no-default-features: false   # crate requires at least one of: grpc, http
       extra-test-flags: "-E 'not binary(e2e)'"  # re-enable via run-collector once shared workflow merges
 
+  # Heap profiling on the target consuming services actually ship.
+  #
+  # The `ci` job above runs heap-probe against the host target: dynamically
+  # linked glibc. Every consumer ships a STATICALLY LINKED MUSL binary
+  # (FROM scratch images, --target x86_64-unknown-linux-musl), and jemalloc's
+  # prof walks a stack on every sampled allocation — which is exactly what a
+  # static musl binary has no working unwinder for.
+  #
+  # brefwiz-spiffe 0.48.0, 0.49.0 and 0.49.1 each shipped heap profiling
+  # broken, and each was caught by a rollout rather than by CI: 0.49.1
+  # segfaulted (exit 139) in staging under the very configuration the glibc
+  # probe proves "works". The arch matters too — the same probe passes on
+  # aarch64 musl, so only x86_64 musl reproduces it.
+  #
+  # ubuntu-latest is x86_64, so the musl binary runs natively here. No QEMU,
+  # no emulation caveat: this is the shipped target.
+  heap-profiling-musl:
+    name: Heap profiling (static musl, shipped target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # No host toolchain setup: the target runs everything inside a musl
+      # container, which is also where libunwind built against musl comes from.
+      # Same environment here and on a dev machine, so a green here is not a
+      # property of the runner.
+      - name: Heap probe on static musl
+        run: make ci-heap-probe-musl
+
   # Coverage gate requires a live OTel Collector on :4317.
   e2e:
     name: E2E + Coverage

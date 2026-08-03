@@ -114,6 +114,96 @@ ci-test: ## CI: run unit tests with nextest
 	RUSTFLAGS="-D warnings" $(CARGO) nextest run --workspace \
 		--all-features -E 'not binary(e2e)'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Heap profiling on the target that actually ships
+#
+# The host `heap-probe` run under ci-test links glibc dynamically. Every
+# consuming service ships a STATICALLY LINKED MUSL binary (FROM scratch
+# images, `--target x86_64-unknown-linux-musl`), and that difference is not
+# cosmetic: jemalloc's `prof` walks a stack on each sampled allocation, and
+# with --enable-prof alone it walks it through libgcc's _Unwind_Backtrace,
+# which has no working unwind path in a static musl binary. The fix is
+# tikv-jemalloc-sys/profiling_libunwind (see Cargo.toml); this target is what
+# proves it on the shipped target rather than on the host's glibc.
+#
+# The cost of not testing this: brefwiz-spiffe 0.48.0, 0.49.0 and 0.49.1 all
+# shipped with heap profiling broken. 0.49.1 segfaulted (exit 139) in staging
+# with sampling armed from Rust — the configuration the host probe proves
+# "works" — because the host probe was never musl. Three releases, each caught
+# by a rollout rather than by CI.
+#
+# Runs in a musl container on every host, CI included. One environment rather
+# than a native path and a container path that can drift apart — and the
+# container is where libunwind built against musl comes from. On an x86_64
+# runner this is the shipped target natively; on an arm64 dev machine it is
+# aarch64 musl, which shares the static-musl variable under test.
+# ─────────────────────────────────────────────────────────────────────────────
+MALLOC_CONF_PROD ?= prof:true,prof_active:false,lg_prof_sample:19
+# Force a container arch, e.g. MUSL_PLATFORM=linux/amd64 to reproduce the
+# shipped target from an arm64 machine. Unset on x86_64 CI, which already is it.
+MUSL_PLATFORM ?=
+MUSL_PLATFORM_FLAG := $(if $(MUSL_PLATFORM),--platform $(MUSL_PLATFORM),)
+
+ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped target)
+	@docker run --rm $(MUSL_PLATFORM_FLAG) -v "$$PWD":/src -w /src \
+		-v "$$HOME/.cargo/registry":/usr/local/cargo/registry \
+		-e CARGO_TARGET_DIR=/tmp/muslbuild \
+		-e MALLOC_CONF_PROD='$(MALLOC_CONF_PROD)' \
+		rust:alpine sh -ec '\
+		apk add --no-cache musl-dev gcc make bash perl libunwind-dev libunwind-static binutils xz-dev xz-static zlib-dev zlib-static >/dev/null; \
+		arch=$$(uname -m); \
+		echo "==> what libunwind actually provides on musl"; \
+		ls -1 /usr/lib/libunwind*.a 2>/dev/null || echo "    (no libunwind archives)"; \
+		for f in /usr/lib/libunwind*.a; do \
+			[ -e "$$f" ] || continue; \
+			n=$$(nm -g --defined-only "$$f" 2>/dev/null | grep -cw "unw_backtrace" || true); \
+			u=$$(nm -g --defined-only "$$f" 2>/dev/null | grep -c "_U.*_backtrace" || true); \
+			echo "    $$f: unw_backtrace=$$n  _U*_backtrace=$$u"; \
+		done; \
+		echo "==> minimal static link test: can ANY link line resolve unw_backtrace?"; \
+		printf "#define UNW_LOCAL_ONLY\\n#include <libunwind.h>\\nint main(void){void*b[4];return unw_backtrace(b,4);}\\n" > /tmp/t.c; \
+		if gcc -static -o /tmp/t /tmp/t.c -lunwind -l:liblzma.a -l:libz.a 2>/tmp/t.err; then \
+			echo "    MINIMAL STATIC LINK OK — libunwind can satisfy it; the problem is how rustc composes the line"; \
+		else \
+			echo "    MINIMAL STATIC LINK FAILED — libunwind on static musl cannot satisfy unw_backtrace:"; \
+			sed -n "1,6p" /tmp/t.err | sed "s/^/      /"; \
+		fi; \
+		echo "==> linking libunwind-$$arch.a as a static archive"; \
+		echo "    unw_backtrace lives in the arch-specific lib, not in libunwind itself,"; \
+		echo "    so tikv-jemalloc-sys emitting -lunwind alone under-links. Naming the"; \
+		echo "    archive with -l: is required too: rustc places extra link args after"; \
+		echo "    -Wl,-Bdynamic, so a plain -lunwind-$$arch resolves to the .so, which a"; \
+		echo "    -static-pie link cannot use — it is skipped and the symbol stays undefined."; \
+		triple="$$arch-unknown-linux-musl"; \
+		tenv=$$(echo "$$triple" | tr "a-z-" "A-Z_"); \
+		echo "==> target-scoped link flags for $$triple"; \
+		echo "    RUSTFLAGS would also apply to host build scripts and break them"; \
+		echo "    (quote/proc-macro2/libc failed to compile that way); CARGO_TARGET_*"; \
+		echo "    with an explicit --target keeps them off host artifacts."; \
+		echo "==> building via the build script in this crate: no hand-tuned link flags"; \
+		echo "    build.rs extracts and republishes the unwind shim and emits the"; \
+		echo "    link directives itself, so this exercises exactly what a consumer"; \
+		echo "    gets from enabling the feature — nothing here that a service lacks."; \
+			cargo build --features profiling-memory-probe --bin heap-probe --target "$$triple"; \
+		echo "==> target: $$(uname -m) static musl"; \
+		set +e; \
+		_RJEM_MALLOC_CONF="$$MALLOC_CONF_PROD" /tmp/muslbuild/$$triple/debug/heap-probe; \
+		rc=$$?; \
+		set -e; \
+		if [ $$rc -ge 128 ]; then \
+			echo ""; \
+			echo "ERROR: heap profiling killed the process by signal $$((rc - 128)) on static musl."; \
+			echo "  _RJEM_MALLOC_CONF=$$MALLOC_CONF_PROD"; \
+			echo "  This is the target consuming services ship. jemalloc prof walks a"; \
+			echo "  stack per sampled allocation; without libunwind it walks it through"; \
+			echo "  libgcc, which has no working unwind path in a static musl binary."; \
+			exit $$rc; \
+		elif [ $$rc -ne 0 ]; then \
+			echo ""; \
+			echo "ERROR: heap probe exited $$rc on static musl — profiling did not arm."; \
+			exit $$rc; \
+		fi'
+
 ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets
 	$(CARGO) check --workspace --all-targets --all-features
