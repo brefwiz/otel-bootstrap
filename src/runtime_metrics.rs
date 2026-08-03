@@ -229,11 +229,25 @@ fn tokio_global_queue_depth() -> Option<u64> {
 }
 
 /// Resident set size in bytes, or `None` where `/proc` is unavailable.
+fn resident_memory_bytes() -> Option<u64> {
+    resident_memory_from(std::path::Path::new("/proc/self/statm"))
+}
+
+/// Read and parse a `statm`-format file.
+///
+/// Split from [`resident_memory_bytes`] so the failure paths can be tested:
+/// on Linux the real file always reads and parses, so the `?` arms below are
+/// otherwise dead in every environment where this code actually runs.
+fn resident_memory_from(path: &std::path::Path) -> Option<u64> {
+    parse_statm_resident(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Extract the resident page count from `statm` contents and convert to bytes.
 ///
 /// `/proc/self/statm` reports page counts; field 1 is the resident count.
-/// Field 0 is total program size, which is why the index matters.
-fn resident_memory_bytes() -> Option<u64> {
-    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+/// Field 0 is total program size, which is why the index matters — reading the
+/// wrong field is the likely bug here, and it is silent, so it gets a test.
+fn parse_statm_resident(statm: &str) -> Option<u64> {
     let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
     // `sysconf(_SC_PAGESIZE)` is 4 KiB on every target this crate ships to;
     // the constant avoids a libc dependency for one lookup.
@@ -243,6 +257,31 @@ fn resident_memory_bytes() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_the_resident_field_not_the_first() {
+        // Field 0 is total program size, field 1 is resident. Distinct values
+        // so reading the wrong one cannot accidentally pass.
+        assert_eq!(parse_statm_resident("100 7 3 1 0 2 0"), Some(7 * 4096));
+    }
+
+    #[test]
+    fn rejects_malformed_statm() {
+        assert_eq!(parse_statm_resident(""), None, "empty");
+        assert_eq!(parse_statm_resident("100"), None, "no second field");
+        assert_eq!(parse_statm_resident("100 abc"), None, "unparsable");
+        assert_eq!(parse_statm_resident("100 -3"), None, "negative page count");
+    }
+
+    #[test]
+    fn missing_statm_file_reads_as_absent() {
+        // The real file always exists on Linux, so this is the only way to
+        // reach the read-failure path.
+        assert_eq!(
+            resident_memory_from(std::path::Path::new("/nonexistent/otel-bootstrap/statm")),
+            None
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
