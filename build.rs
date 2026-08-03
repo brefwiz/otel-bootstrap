@@ -95,20 +95,40 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
 
-    let Some((dir, archive)) = search_dirs(&target).into_iter().find_map(|d| {
+    let searched = search_dirs(&target);
+    let Some((dir, archive)) = searched.clone().into_iter().find_map(|d| {
         let a = d.join("libunwind.a");
         a.is_file().then_some((d, a))
     }) else {
-        // Not fatal: the link will fail with a clear undefined reference to
-        // unw_backtrace, and saying so here points at the cause rather than
-        // leaving the linker to.
-        println!(
-            "cargo:warning=otel-bootstrap: heap profiling is enabled for a musl \
-             target but no musl-built libunwind.a was found. Install one, or set \
-             OTEL_BOOTSTRAP_MUSL_LIBUNWIND_DIR. Without it the link fails with \
-             `undefined reference to unw_backtrace`."
+        // Fail the build. This was a cargo:warning, which cargo SUPPRESSES for
+        // dependency build scripts — so the one message explaining the problem
+        // was invisible to every consumer, and the build went on to produce a
+        // binary that segfaulted on its first sampled allocation. brefwiz-spiffe
+        // shipped that shape three times, and hit it a fourth when a CI image
+        // predating the libunwind rollout silently took this branch.
+        //
+        // Enabling heap profiling for musl without a usable libunwind is not a
+        // degraded mode, it is a broken binary. Refuse to produce one.
+        panic!(
+            "otel-bootstrap: heap profiling (profiling-memory-jemalloc) is \
+             enabled for target {target}, but no musl-built libunwind.a was \
+             found in any of: {searched}.\n\
+             \n\
+             jemalloc calls unw_backtrace on every sampled allocation and a \
+             static musl binary has no working unwinder without this. Building \
+             anyway produces a binary that segfaults at runtime rather than one \
+             that fails here.\n\
+             \n\
+             Provide a musl-built libunwind (the brefwiz CI image ships one at \
+             /usr/local/musl/<arch>/lib), or point OTEL_BOOTSTRAP_MUSL_LIBUNWIND_DIR \
+             at one, or build without the feature.",
+            target = target,
+            searched = searched
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
         );
-        return;
     };
 
     let Some(member) = member_defining_unw_backtrace(&archive) else {
