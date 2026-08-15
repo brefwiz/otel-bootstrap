@@ -3,9 +3,6 @@
 use std::error::Error;
 use std::sync::OnceLock;
 
-#[cfg(feature = "profiling-bridge-pyroscope-rs")]
-use opentelemetry::trace::TraceContextExt;
-
 /// Validate that a pyroscope endpoint targets only loopback (per ADR platform/0203 AC1).
 /// Allowed: 127.0.0.1, ::1, localhost, unix socket paths.
 /// Rejects routable addresses to prevent unauthenticated plaintext profile data leaving the pod.
@@ -121,14 +118,6 @@ impl Drop for ProfilingHandle {
     }
 }
 
-#[cfg(feature = "profiling-bridge-pyroscope-rs")]
-type BoxedTagFn = Box<dyn Fn(String, String) -> pyroscope::Result<()> + Send + Sync>;
-
-/// Module-level storage for profiling tag functions (add_tag, remove_tag)
-/// obtained from the running pyroscope agent.
-#[cfg(feature = "profiling-bridge-pyroscope-rs")]
-static PROFILING_TAG_FNS: OnceLock<(BoxedTagFn, BoxedTagFn)> = OnceLock::new();
-
 /// Guards against starting more than one profiling agent per process.
 /// The `pprof` backend keeps a single process-wide profiler guard, so a
 /// second concurrent agent would fail to start; subsequent calls are
@@ -177,10 +166,9 @@ pub(crate) fn start_pyroscope_bridge(
     .build()?
     .start()?;
 
-    let (add_tag, remove_tag) = agent.tag_wrapper();
-    PROFILING_TAG_FNS
-        .set((Box::new(add_tag), Box::new(remove_tag)))
-        .ok();
+    // Deliberately NOT calling `agent.tag_wrapper()`. See [`ProfilingTagLayer`]:
+    // every tag call rebuilds and clears the whole profile, which both leaked
+    // memory and emptied the profiles it was meant to enrich.
 
     Ok(Some(ProfilingHandle {
         agent: Some(agent),
@@ -381,43 +369,66 @@ pub(crate) fn start_pyroscope_bridge(
     Ok(None)
 }
 
-/// Tracing layer that tags active span enter/exit with trace_id and span_id
-/// in the running pyroscope agent.
+/// Inert. Was: a tracing layer that tagged the running pyroscope agent with
+/// `trace_id`/`span_id` on every span enter and exit.
+///
+/// # Why this does nothing
+///
+/// Per-span tagging is not implementable against the `pprof` backend, and
+/// enabling it was strictly worse than having no correlation at all. In
+/// pyroscope-rs the backend's own comment calls `dump_report` a *"workaround
+/// for pprof-rs to interrupt the profiler"*, and both `Backend::add_tag` and
+/// `Backend::remove_tag` call it unconditionally. One `dump_report` symbolises
+/// every entry currently in the collector — `backtrace::resolve` per frame,
+/// building a fresh `Vec<Vec<Symbol>>` with a `String` and a `PathBuf` per
+/// symbol — and then clears the collector.
+///
+/// So each span enter cost two full profile rebuilds, and each exit two more.
+/// Measured on a static-musl build at the shipped 100 Hz sample rate, driving
+/// spans from two threads:
+///
+/// ```text
+/// t=10s  dumps=868726  clears=868725  sessions=1  collector_entries=0
+/// ```
+///
+/// ~87,000 profile rebuilds per second against one 10-second upload. Two
+/// consequences, and the second is why this is not merely a tuning problem:
+///
+/// 1. The allocation churn grew RSS without bound. Over 90 minutes on static
+///    musl the leak was 7.4 MiB/h with this layer and 1.0 MiB/h without, which
+///    matches the 6.5 MiB/h observed on brefwiz-spiffe in production, where it
+///    OOM-killed both replicas roughly every 5.5 hours against a 512Mi cgroup.
+/// 2. `collector_entries=0` at *every* upload: the collector was cleared far
+///    faster than the 100 Hz sampler could fill it, so the profiles this layer
+///    existed to enrich were arriving essentially empty. The correlation
+///    feature destroyed the very data it annotated.
+///
+/// Sampling itself is not implicated — with tagging off, 63,254 samples over
+/// 420 seconds moved RSS by 0.03 MiB/h.
+///
+/// # What replaces it
+///
+/// Nothing, on this backend: there is no bounded form. The cost is per tag
+/// call, so sampling spans or tagging only roots still buys full profile
+/// rebuilds at a fraction of the span rate, and each rebuild still truncates
+/// the sample window. Trace/profile correlation returns with the native OTLP
+/// profiles exporter this bridge is already sunset-bound against.
+///
+/// The type is kept, registered, and doing nothing so the subscriber stack and
+/// the public surface are unchanged; it is removed in the next major.
 #[cfg(feature = "profiling-bridge-pyroscope-rs")]
+#[deprecated(
+    since = "2.15.0",
+    note = "inert: per-span pyroscope tagging leaked memory and emptied profiles; \
+            correlation returns with the OTLP profiles exporter"
+)]
 pub struct ProfilingTagLayer;
 
 #[cfg(feature = "profiling-bridge-pyroscope-rs")]
-impl<S> tracing_subscriber::Layer<S> for ProfilingTagLayer
-where
-    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+#[allow(deprecated)]
+impl<S> tracing_subscriber::Layer<S> for ProfilingTagLayer where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>
 {
-    fn on_enter(&self, _id: &tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
-        if let Some((add_tag, _)) = PROFILING_TAG_FNS.get() {
-            let cx = opentelemetry::Context::current();
-            let span_ref = cx.span();
-            let span_context = span_ref.span_context();
-            if span_context.is_valid() {
-                let trace_id = span_context.trace_id();
-                let span_id = span_context.span_id();
-                let _ = add_tag("trace_id".to_string(), format!("{trace_id:x}"));
-                let _ = add_tag("span_id".to_string(), format!("{span_id:x}"));
-            }
-        }
-    }
-
-    fn on_exit(&self, _id: &tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
-        if let Some((_, remove_tag)) = PROFILING_TAG_FNS.get() {
-            let cx = opentelemetry::Context::current();
-            let span_ref = cx.span();
-            let span_context = span_ref.span_context();
-            if span_context.is_valid() {
-                let trace_id = span_context.trace_id();
-                let span_id = span_context.span_id();
-                let _ = remove_tag("trace_id".to_string(), format!("{trace_id:x}"));
-                let _ = remove_tag("span_id".to_string(), format!("{span_id:x}"));
-            }
-        }
-    }
 }
 
 #[cfg(all(test, feature = "profiling-bridge-pyroscope-rs"))]

@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.14.1"
+version = "2.15.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -63,6 +63,18 @@ profiling-memory-jemalloc = ["profiling-bridge-pyroscope-rs", "pyroscope/backend
 # under the plain `clippy --all-features` CI runs — the multi-thread runtime is
 # the whole point of the probe, since blocking_lock only panics on a worker.
 profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator", "tokio/rt-multi-thread"]
+# Builds the `rss-probe` binary and its test. The bridge's memory behaviour is
+# a property of a running process — live agent, real SIGPROF sampler, real
+# subscriber stack, spans entered on worker threads — so it cannot be asserted
+# from a library test, which is how the per-span tagging leak that OOM-killed
+# brefwiz-spiffe survived two releases with the bridge under test the whole
+# time. Separate flag because the probe costs ~65s of wall clock; CI runs
+# --all-features, so it is built there and run via `make ci-rss-probe`.
+# tokio/rt-multi-thread is declared here for the same reason as on the heap
+# probe: a [[bin]] sees only the library's dependencies, and `init()` installs
+# OTLP exporters that need a runtime in context. A multi-thread runtime, not
+# current-thread, because that is the shape services bootstrap under.
+profiling-rss-probe = ["profiling-bridge-pyroscope-rs", "tokio/rt-multi-thread", "dep:flate2"]
 
 [dependencies]
 opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
@@ -97,6 +109,9 @@ tikv-jemallocator = { version = "0.7", features = ["profiling"], optional = true
 # Not called directly — pulled in so profiling_libunwind can be turned on for
 # the whole graph (see profiling-memory-jemalloc above).
 tikv-jemalloc-sys = { version = "0.7", optional = true }
+# rss-probe only: the profiling bridge gzips its uploads, and the gate asserts
+# on what is inside them rather than on their size.
+flate2 = { version = "1", optional = true }
 
 [[example]]
 name = "basic_setup"
@@ -140,3 +155,10 @@ async-trait = "0.1"
 [[bin]]
 name = "heap-probe"
 required-features = ["profiling-memory-probe"]
+
+# Real-process probe for profiling-bridge memory stability. Not shipped to
+# consumers — gated behind profiling-rss-probe, which nothing but CI and local
+# validation enables.
+[[bin]]
+name = "rss-probe"
+required-features = ["profiling-rss-probe"]

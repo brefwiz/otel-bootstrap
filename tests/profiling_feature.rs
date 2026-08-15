@@ -11,12 +11,16 @@ async fn profiling_bridge_enabled_when_sub_feature_active() {
     );
 
     if let Ok(handles) = result {
-        // Test that spans can be created within the tracing context
-        // and the profiling tag layer can exercise its on_enter/on_exit paths
+        // Spans can be created and entered with the bridge active.
+        //
+        // This used to assert that ProfilingTagLayer's on_enter/on_exit ran
+        // cleanly, which they did — while rebuilding the whole profile on each
+        // one, leaking ~6.5 MiB/h and emptying the profiles. A test that enters
+        // one span cannot see either. The layer is inert now; the property that
+        // needs guarding lives in `profiling_rss_stability.rs`, which drives
+        // sustained span load against a live agent.
         let span = tracing::info_span!("profiling_test");
         let _guard = span.enter();
-        // If we reach here without panicking, ProfilingTagLayer::on_enter/on_exit
-        // executed cleanly with the bridge active.
 
         // Shutdown gracefully
         let _ = handles.shutdown();

@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] — 2026-08-14
+
+### Fixed
+
+- The profiling bridge no longer leaks memory, and no longer throws away the
+  profiles it collects. `ProfilingTagLayer` tagged the pyroscope agent with
+  `trace_id`/`span_id` on every span enter and exit, and in pyroscope's `pprof`
+  backend both `add_tag` and `remove_tag` call `dump_report` — the backend's
+  own comment calls it a "workaround for pprof-rs to interrupt the profiler".
+  Each call symbolises every entry in the sample collector and then clears it.
+
+  So each span enter cost two full profile rebuilds and each exit two more.
+  Measured on static musl at the shipped 100 Hz sample rate: **868,726 rebuilds
+  in the first 10 seconds**, 25.8 million over 300 seconds, against 30 uploads.
+
+  Two consequences, and the second is why this was not a tuning problem:
+
+  1. The symbolisation churn grew RSS without bound — 7.4 MiB/h with tagging
+     against 1.0 MiB/h without, over 90-minute static-musl runs. brefwiz-spiffe
+     saw 6.5 MiB/h in prod and 5.3 MiB/h in staging, and was OOM-killed against
+     its 512Mi cgroup roughly every 5.5 hours, on both replicas, in both
+     environments, for twelve days (~64 restarts in prod, ~56 in staging). The
+     rate tracked span activity rather than request volume, which is why two
+     environments at very different traffic levels leaked at nearly the same
+     rate.
+  2. The collector was cleared far faster than the sampler could fill it, so
+     every upload carried an essentially empty profile — `collector_entries=0`
+     at every single upload under load. The correlation feature destroyed the
+     data it annotated.
+
+  Sampling itself was never implicated: with tagging off, 63,254 samples over
+  420 seconds moved RSS by 0.03 MiB/h.
+
+  There is no bounded form of this on the `pprof` backend. The cost is per tag
+  call, so sampling spans or tagging only roots still buys full profile
+  rebuilds at a fraction of the span rate, and each rebuild still truncates the
+  sample window. Trace/profile correlation returns with the native OTLP
+  profiles exporter this bridge is sunset-bound against (ADR platform/0202).
+
+### Added
+
+- A guard against reintroducing per-span tagging, plus `rss-probe` and
+  `make ci-rss-probe-musl` as a memory smoke test on the shipped target.
+
+  The guard is a source check — `src/profiling.rs` must not call
+  `tag_wrapper()`, and `ProfilingTagLayer` must not regain span callbacks — and
+  that is a deliberate retreat from trying to assert it behaviourally. Through
+  the real `Telemetry` path the defect is close to externally unobservable on
+  release static musl. All four of these were measured, and all four passed on
+  the broken build:
+
+  | signal | fixed | broken |
+  |---|---|---|
+  | upload size | 823 B/profile | 828 B/profile |
+  | attributable RSS | 5.09 MiB/h | 1.49 MiB/h (lower!) |
+  | span throughput | 14,499/s | 14,518/s |
+  | per-span labels on the wire | 0 | 0 |
+
+  RSS runs *higher* on the healthy build because the broken one cleared the
+  collector faster than the sampler could fill it, so it had less to symbolise.
+  And the `trace_id`/`span_id` labels never reach the wire at all: `add_tag`
+  pays for a full `dump_report` and the tag then fails to survive into the
+  encoded profile — all cost, no signal. What is unambiguous is the call that
+  arms it, so that is what is pinned. It fails on the reinstated defect and
+  passes on the fix, in milliseconds.
+
+  `rss-probe` remains as a memory smoke test: it drives spans against a live
+  agent on static musl and bounds RSS growth against a no-profiling control. It
+  is what established that the fixed bridge holds ~33 MB flat (0.39 MiB/h over
+  55 minutes), but it is not the tagging gate and its RSS bound is deliberately
+  coarse.
+
+  Both run in a musl container for the same reason `ci-heap-probe-musl` does:
+  every number here is dominated by symbolisation, and the same fixed code
+  measures ~800 MiB/h on a macOS host, ~110 on a dev-profile musl build, and
+  single digits on release static musl. Only the last is about production.
+
+  One trap worth recording, since it cost a full round of measurement: the tag
+  path only fires when `opentelemetry::Context::current()` carries a valid span
+  context. A bare `info_span!` does not attach one, so a probe built that way
+  leaves the defect dormant and scores both builds identically.
+
+### Deprecated
+
+- `profiling::ProfilingTagLayer` is inert and deprecated. It is still exported
+  and still registered in the subscriber stack, so the public surface and the
+  subscriber type are unchanged; it does nothing. Removed in the next major.
+
 ## [2.14.1] — 2026-08-03
 
 ### Fixed
