@@ -204,6 +204,51 @@ ci-heap-probe-musl: ## CI: run heap-probe as a static musl binary (the shipped t
 			exit $$rc; \
 		fi'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Profiling-bridge memory stability
+#
+# ci-test cannot hold this. The bridge leaks only under sustained span load
+# against a live agent, and the signal is a slope over ~a minute — not
+# something a unit test asserts. brefwiz-spiffe shipped the leak to production
+# with the bridge under test the entire time: ProfilingTagLayer tagged the
+# pyroscope agent on every span enter and exit, each tag call rebuilt and
+# cleared the whole profile (~87,000 rebuilds/second, measured), and RSS grew
+# 6.5 MiB/h until the pod hit its 512Mi cgroup and was OOM-killed. Every ~5.5
+# hours, on both replicas, in prod and staging, for twelve days.
+#
+# Marked #[ignore] so ci-test stays fast; this target is what runs it.
+# ─────────────────────────────────────────────────────────────────────────────
+ci-rss-probe: ## CI: assert the profiling bridge does not grow RSS under span load
+	RUSTFLAGS="-D warnings" $(CARGO) test --features profiling-rss-probe \
+		--test profiling_rss_stability -- --ignored --nocapture
+
+# The host run above is indicative only, and on macOS it is not even that.
+#
+# Every number this probe reports is dominated by symbolisation, and
+# symbolisation is a property of the binary's debug info and the platform's
+# symbol lookup. A `cargo test` binary on a macOS dev machine carries far more
+# DWARF than the stripped static-musl executable services ship, and resolves it
+# through a different path: the same fixed code measures ~800 MiB/h there and
+# ~1 MiB/h on static musl. Only the second number is about production.
+#
+# Same reasoning, and the same container shape, as ci-heap-probe-musl.
+RSS_PROBE_WARMUP_SECS ?=
+RSS_PROBE_MEASURE_SECS ?=
+# Optional test-name filter, for characterising one arm without paying for both.
+RSS_PROBE_FILTER ?=
+
+ci-rss-probe-musl: ## CI: run the RSS probe as a static musl binary (the shipped target)
+	@docker run --rm $(MUSL_PLATFORM_FLAG) -v "$$PWD":/src -w /src \
+		-v "$$HOME/.cargo/registry":/usr/local/cargo/registry \
+		-e CARGO_TARGET_DIR=/tmp/muslbuild \
+		-e RSS_PROBE_WARMUP_SECS='$(RSS_PROBE_WARMUP_SECS)' \
+		-e RSS_PROBE_MEASURE_SECS='$(RSS_PROBE_MEASURE_SECS)' \
+		rust:alpine sh -ec '\
+		apk add --no-cache musl-dev gcc make bash >/dev/null; \
+		echo "==> RSS probe on $$(uname -m) static musl"; \
+		RUSTFLAGS="-D warnings" cargo test --release --features profiling-rss-probe \
+			--test profiling_rss_stability -- --ignored --nocapture $(RSS_PROBE_FILTER)'
+
 ci-build-check: ## Pre-push compile gate: workspace + all feature combinations
 	$(CARGO) check --workspace --all-targets
 	$(CARGO) check --workspace --all-targets --all-features

@@ -962,7 +962,10 @@ impl TelemetryBuilder {
                     .with($fmt_layer)
                     .with(otel_layer);
 
+                // Inert since 2.15.0 — kept in the stack so the subscriber type
+                // is unchanged. See `profiling::ProfilingTagLayer`.
                 #[cfg(feature = "profiling-bridge-pyroscope-rs")]
+                #[allow(deprecated)]
                 let registry = registry.with(crate::profiling::ProfilingTagLayer);
 
                 if let Some(lp) = &logger_provider {

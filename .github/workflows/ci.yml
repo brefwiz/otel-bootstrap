@@ -49,6 +49,28 @@ jobs:
       - name: Heap probe on static musl
         run: make ci-heap-probe-musl
 
+  # CPU-profiling bridge memory + output health, on the shipped target.
+  #
+  # The `ci` job cannot hold this. The defect it gates is per span, and only
+  # shows up under sustained span load against a live agent — brefwiz-spiffe
+  # ran the leaking bridge in production for twelve days while every test in
+  # this repo stayed green, because tests initialise the bridge and enter a
+  # span or two, which is not the same thing at all.
+  #
+  # Static musl for the same reason as the heap probe, and it matters more
+  # here: every number this probe reports is dominated by symbolisation, and
+  # the same code measures ~800 MiB/h on a macOS host, ~110 on a dev-profile
+  # musl build, and single digits on release static musl. Only the last is
+  # about production.
+  rss-profiling-musl:
+    name: Profiling bridge memory (static musl, shipped target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: RSS probe on static musl
+        run: make ci-rss-probe-musl
+
   # Coverage gate requires a live OTel Collector on :4317.
   e2e:
     name: E2E + Coverage
