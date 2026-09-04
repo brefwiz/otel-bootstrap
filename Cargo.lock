@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "otel-bootstrap"
-version = "2.15.0"
+version = "2.16.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1809,7 +1809,6 @@ dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
- "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
