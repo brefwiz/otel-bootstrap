@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] — 2026-09-04
+
+### Changed
+
+- **`grpc-mtls` now selects the `aws-lc-rs` rustls provider instead of `ring`.**
+  The feature listed `opentelemetry-otlp/tls`, which reads as provider-neutral
+  and is not — upstream defines `tls = ["tls-ring"]`, so enabling it silently
+  picked ring. A consumer standardised on `aws-lc-rs` therefore linked both
+  providers, or linked the one it had rejected, with nothing in the build
+  saying so.
+
+  **This is a behaviour change for `grpc-mtls` users.** If you depend on ring
+  specifically, enable `opentelemetry-otlp/tls-ring` yourself; feature
+  unification will honour it. Everyone else needs no change.
+
+  Guarded by `tests/tls_provider.rs`, which asserts the feature names a
+  provider explicitly and rejects the bare alias.
+
 ## [2.15.0] — 2026-08-14
 
 ### Fixed

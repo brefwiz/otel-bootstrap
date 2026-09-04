@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.15.0"
+version = "2.16.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -24,7 +24,13 @@ grpc = ["opentelemetry-otlp/grpc-tonic"]
 # Callers supply PEM material via TelemetryBuilder::with_mtls(MtlsMaterial).
 # v1: cert/key are read ONCE at init — pod must restart on SVID rotation.
 # (Rotation watcher is a follow-up; not blocking initial mTLS rollout.)
-grpc-mtls = ["grpc", "dep:tonic", "opentelemetry-otlp/tls", "opentelemetry-otlp/tls-roots"]
+#
+# `tls-aws-lc`, NOT `tls`. In opentelemetry-otlp `tls = ["tls-ring"]`, so the
+# obvious-looking name is not provider-neutral: it silently selects ring. A
+# deployment that has standardised on aws-lc-rs then ends up linking both
+# providers, or linking the one it rejected, purely because this crate did not
+# say which it wanted. Naming the provider is the whole point of the feature.
+grpc-mtls = ["grpc", "dep:tonic", "opentelemetry-otlp/tls-aws-lc", "opentelemetry-otlp/tls-roots"]
 http = ["opentelemetry-otlp/http-proto", "opentelemetry-otlp/reqwest-client"]
 integration-tests = []
 testing = ["opentelemetry_sdk/testing"]
