@@ -39,6 +39,7 @@ pub mod grpc_middleware;
 pub mod profiling;
 mod runtime_metrics;
 
+pub mod export_backoff;
 pub mod instrumented_port;
 pub mod log_bridge;
 pub mod span_enrichment;
@@ -391,6 +392,7 @@ impl Telemetry {
             metrics: true,
             logs: false,
             protocol: None,
+            default_endpoint: None,
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
@@ -426,6 +428,7 @@ impl Telemetry {
             metrics: true,
             logs: false,
             protocol: None,
+            default_endpoint: None,
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
@@ -486,6 +489,7 @@ pub struct TelemetryBuilder {
     propagated_span_fields: &'static [&'static str],
     #[cfg(feature = "profiling")]
     pyroscope_endpoint: Option<String>,
+    default_endpoint: Option<String>,
 }
 
 /// Type-erased adapter that applies an extra `MetricReader` to the
@@ -584,6 +588,15 @@ impl TelemetryBuilder {
     /// short-lived CLI whose runtime state carries no operational meaning.
     pub fn with_runtime_metrics(mut self, enabled: bool) -> Self {
         self.runtime_metrics = enabled;
+        self
+    }
+
+    /// The collector endpoint to use when `OTEL_EXPORTER_OTLP_ENDPOINT` is
+    /// unset. A runtime that knows where its platform's collector lives
+    /// names it here, so the exporter does not fall back to `localhost`.
+    /// The environment variable, when set, still wins.
+    pub fn with_default_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.default_endpoint = Some(endpoint.into());
         self
     }
 
@@ -798,8 +811,11 @@ impl TelemetryBuilder {
             #[cfg(feature = "http")]
             ExportProtocol::HttpProtobuf => "http://localhost:4318",
         };
-        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| default_endpoint.to_string());
+        let endpoint = resolve_endpoint(
+            std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            self.default_endpoint.as_deref(),
+            default_endpoint,
+        );
 
         // Resolve export timeout: explicit builder > OTEL_EXPORTER_OTLP_TIMEOUT > SDK default (10 s)
         let export_timeout = self.export_timeout.or_else(timeout_from_env);
@@ -956,8 +972,11 @@ impl TelemetryBuilder {
                 // is inferred against that branch's concrete fmt layer.
                 let otel_layer = tracing_opentelemetry::layer()
                     .with_tracer(tracing_bridge_tracer(&tracer_provider));
+                // An unreachable collector would otherwise log a failed
+                // export every few seconds and bury every real error.
                 let registry = tracing_subscriber::registry()
                     .with(extra)
+                    .with(crate::export_backoff::ExportFailureBackoff::default())
                     .with(log_filter)
                     .with($fmt_layer)
                     .with(otel_layer);
@@ -1073,6 +1092,18 @@ fn build_tls_config(material: &MtlsMaterial) -> tonic::transport::ClientTlsConfi
             &material.client_cert_chain_pem,
             &material.client_key_pem,
         ))
+}
+
+/// The configured endpoint wins, then the runtime's default, then the
+/// protocol's local fallback.
+fn resolve_endpoint(
+    configured: Option<String>,
+    runtime_default: Option<&str>,
+    fallback: &str,
+) -> String {
+    configured
+        .or_else(|| runtime_default.map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn build_span_exporter(
@@ -1772,6 +1803,35 @@ mod tests {
 
         assert!(error.to_string().contains("invalid filter directive"));
         assert!(!setup_ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn builder_with_default_endpoint() {
+        let builder = Telemetry::builder("svc").with_default_endpoint("http://otel-collector:4317");
+        assert_eq!(
+            builder.default_endpoint.as_deref(),
+            Some("http://otel-collector:4317")
+        );
+    }
+
+    #[test]
+    fn a_configured_endpoint_wins_over_the_runtime_default() {
+        assert_eq!(
+            resolve_endpoint(
+                Some("http://c:4317".into()),
+                Some("http://d:4317"),
+                "http://localhost:4317"
+            ),
+            "http://c:4317"
+        );
+        assert_eq!(
+            resolve_endpoint(None, Some("http://d:4317"), "http://localhost:4317"),
+            "http://d:4317"
+        );
+        assert_eq!(
+            resolve_endpoint(None, None, "http://localhost:4317"),
+            "http://localhost:4317"
+        );
     }
 
     #[test]
