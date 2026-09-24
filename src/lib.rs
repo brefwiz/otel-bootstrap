@@ -811,10 +811,11 @@ impl TelemetryBuilder {
             #[cfg(feature = "http")]
             ExportProtocol::HttpProtobuf => "http://localhost:4318",
         };
-        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .ok()
-            .or_else(|| self.default_endpoint.clone())
-            .unwrap_or_else(|| default_endpoint.to_string());
+        let endpoint = resolve_endpoint(
+            std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            self.default_endpoint.as_deref(),
+            default_endpoint,
+        );
 
         // Resolve export timeout: explicit builder > OTEL_EXPORTER_OTLP_TIMEOUT > SDK default (10 s)
         let export_timeout = self.export_timeout.or_else(timeout_from_env);
@@ -1091,6 +1092,18 @@ fn build_tls_config(material: &MtlsMaterial) -> tonic::transport::ClientTlsConfi
             &material.client_cert_chain_pem,
             &material.client_key_pem,
         ))
+}
+
+/// The configured endpoint wins, then the runtime's default, then the
+/// protocol's local fallback.
+fn resolve_endpoint(
+    configured: Option<String>,
+    runtime_default: Option<&str>,
+    fallback: &str,
+) -> String {
+    configured
+        .or_else(|| runtime_default.map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn build_span_exporter(
@@ -1790,6 +1803,35 @@ mod tests {
 
         assert!(error.to_string().contains("invalid filter directive"));
         assert!(!setup_ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn builder_with_default_endpoint() {
+        let builder = Telemetry::builder("svc").with_default_endpoint("http://otel-collector:4317");
+        assert_eq!(
+            builder.default_endpoint.as_deref(),
+            Some("http://otel-collector:4317")
+        );
+    }
+
+    #[test]
+    fn a_configured_endpoint_wins_over_the_runtime_default() {
+        assert_eq!(
+            resolve_endpoint(
+                Some("http://c:4317".into()),
+                Some("http://d:4317"),
+                "http://localhost:4317"
+            ),
+            "http://c:4317"
+        );
+        assert_eq!(
+            resolve_endpoint(None, Some("http://d:4317"), "http://localhost:4317"),
+            "http://d:4317"
+        );
+        assert_eq!(
+            resolve_endpoint(None, None, "http://localhost:4317"),
+            "http://localhost:4317"
+        );
     }
 
     #[test]

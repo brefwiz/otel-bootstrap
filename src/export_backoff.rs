@@ -154,6 +154,28 @@ mod tests {
     }
 
     #[test]
+    fn a_name_recorded_as_debug_is_read_as_its_text() {
+        use tracing_subscriber::prelude::*;
+
+        let seen = std::sync::Arc::new(Mutex::new(0usize));
+        struct Count(std::sync::Arc<Mutex<usize>>);
+        impl<S: Subscriber> Layer<S> for Count {
+            fn on_event(&self, _event: &Event<'_>, _ctx: Context<'_, S>) {
+                *self.0.lock().unwrap() += 1;
+            }
+        }
+        let subscriber = tracing_subscriber::registry()
+            .with(ExportFailureBackoff::default())
+            .with(Count(seen.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..3 {
+                tracing::warn!(target: "opentelemetry_sdk", name = ?"MetricReader.ExportError", "export failed");
+            }
+        });
+        assert_eq!(*seen.lock().unwrap(), 1);
+    }
+
+    #[test]
     fn only_sdk_export_failures_are_rate_limited() {
         use tracing_subscriber::prelude::*;
 
