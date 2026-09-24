@@ -39,6 +39,7 @@ pub mod grpc_middleware;
 pub mod profiling;
 mod runtime_metrics;
 
+pub mod export_backoff;
 pub mod instrumented_port;
 pub mod log_bridge;
 pub mod span_enrichment;
@@ -956,8 +957,11 @@ impl TelemetryBuilder {
                 // is inferred against that branch's concrete fmt layer.
                 let otel_layer = tracing_opentelemetry::layer()
                     .with_tracer(tracing_bridge_tracer(&tracer_provider));
+                // An unreachable collector would otherwise log a failed
+                // export every few seconds and bury every real error.
                 let registry = tracing_subscriber::registry()
                     .with(extra)
+                    .with(crate::export_backoff::ExportFailureBackoff::default())
                     .with(log_filter)
                     .with($fmt_layer)
                     .with(otel_layer);
