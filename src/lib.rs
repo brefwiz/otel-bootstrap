@@ -392,6 +392,7 @@ impl Telemetry {
             metrics: true,
             logs: false,
             protocol: None,
+            default_endpoint: None,
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
@@ -427,6 +428,7 @@ impl Telemetry {
             metrics: true,
             logs: false,
             protocol: None,
+            default_endpoint: None,
             max_export_batch_size: None,
             metric_export_interval: None,
             export_timeout: None,
@@ -487,6 +489,7 @@ pub struct TelemetryBuilder {
     propagated_span_fields: &'static [&'static str],
     #[cfg(feature = "profiling")]
     pyroscope_endpoint: Option<String>,
+    default_endpoint: Option<String>,
 }
 
 /// Type-erased adapter that applies an extra `MetricReader` to the
@@ -585,6 +588,15 @@ impl TelemetryBuilder {
     /// short-lived CLI whose runtime state carries no operational meaning.
     pub fn with_runtime_metrics(mut self, enabled: bool) -> Self {
         self.runtime_metrics = enabled;
+        self
+    }
+
+    /// The collector endpoint to use when `OTEL_EXPORTER_OTLP_ENDPOINT` is
+    /// unset. A runtime that knows where its platform's collector lives
+    /// names it here, so the exporter does not fall back to `localhost`.
+    /// The environment variable, when set, still wins.
+    pub fn with_default_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.default_endpoint = Some(endpoint.into());
         self
     }
 
@@ -800,7 +812,9 @@ impl TelemetryBuilder {
             ExportProtocol::HttpProtobuf => "http://localhost:4318",
         };
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| default_endpoint.to_string());
+            .ok()
+            .or_else(|| self.default_endpoint.clone())
+            .unwrap_or_else(|| default_endpoint.to_string());
 
         // Resolve export timeout: explicit builder > OTEL_EXPORTER_OTLP_TIMEOUT > SDK default (10 s)
         let export_timeout = self.export_timeout.or_else(timeout_from_env);
