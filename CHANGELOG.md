@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] — 2026-09-24
+
+### Added
+
+- **`TelemetryBuilder::with_default_endpoint`.** A runtime that knows where its
+  platform's collector lives names it here, and the exporter uses it when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is unset instead of dialing `localhost`,
+  which in a pod is nothing. The environment variable, when set, still wins.
+
+### Fixed
+
+- **An export failure is logged once, then with a backoff.** The SDK logs every
+  failed export batch at `ERROR`; with an unreachable collector that was a line
+  every few seconds per signal, forever, burying every real error. The
+  subscriber now lets the first failure of each kind through, then the next
+  only after a minute, two, four and so on up to an hour. Other events pass
+  untouched.
+
 ## [2.16.0] — 2026-09-04
 
 ### Changed
