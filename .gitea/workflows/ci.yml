@@ -41,7 +41,6 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
-      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -71,7 +70,6 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
-      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -106,7 +104,6 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
-      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -137,7 +134,6 @@ jobs:
         password: ${{ secrets.HARBOR_TOKEN }}
     env:
       CARGO_REGISTRIES_BREFWIZ_TOKEN: "Bearer ${{ secrets.PACKAGE_READER_TOKEN || secrets.PACKAGE_PUBLISHER_TOKEN }}"
-      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -165,8 +161,6 @@ jobs:
   e2e:
     name: E2E + Coverage
     runs-on: brefwiz
-    env:
-      CI_LOGS_TOKEN: ${{ secrets.CI_LOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
