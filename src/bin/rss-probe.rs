@@ -176,20 +176,36 @@ fn work(n: u64) -> u64 {
     acc
 }
 
-/// Least-squares slope of `(seconds, bytes)` in bytes per second.
+/// Theil–Sen slope of `(seconds, bytes)` in bytes per second: the median of
+/// the slopes between every pair of samples.
+///
+/// A leak grows RSS steadily, and every pair of samples sees that growth, so
+/// the median reports it in full. A single step -- the allocator taking one
+/// more arena, a buffer growing once -- moves only the pairs that straddle it,
+/// and the median ignores them. A least-squares fit does not: one 3 MiB step
+/// near the end of a two-minute window read as 124 MiB/h on an otherwise flat
+/// series, and failed the gate with nothing leaking.
 fn slope(samples: &[(f64, f64)]) -> f64 {
-    let n = samples.len() as f64;
-    if n < 2.0 {
+    let mut pairwise: Vec<f64> = samples
+        .iter()
+        .enumerate()
+        .flat_map(|(i, &(t0, r0))| {
+            samples[i + 1..]
+                .iter()
+                .filter(move |&&(t1, _)| t1 > t0)
+                .map(move |&(t1, r1)| (r1 - r0) / (t1 - t0))
+        })
+        .collect();
+    if pairwise.is_empty() {
         return 0.0;
     }
-    let mean_t = samples.iter().map(|s| s.0).sum::<f64>() / n;
-    let mean_r = samples.iter().map(|s| s.1).sum::<f64>() / n;
-    let num: f64 = samples
-        .iter()
-        .map(|(t, r)| (t - mean_t) * (r - mean_r))
-        .sum();
-    let den: f64 = samples.iter().map(|(t, _)| (t - mean_t).powi(2)).sum();
-    if den > 0.0 { num / den } else { 0.0 }
+    pairwise.sort_by(f64::total_cmp);
+    let mid = pairwise.len() / 2;
+    if pairwise.len() % 2 == 1 {
+        pairwise[mid]
+    } else {
+        (pairwise[mid - 1] + pairwise[mid]) / 2.0
+    }
 }
 
 fn main() {
@@ -357,4 +373,42 @@ fn main() {
     );
 
     let _ = handles.shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slope;
+
+    #[test]
+    fn a_steady_leak_is_reported_in_full() {
+        let samples: Vec<(f64, f64)> = (0..120)
+            .map(|t| (t as f64, 1000.0 + 50.0 * t as f64))
+            .collect();
+        assert!((slope(&samples) - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_single_late_step_is_not_a_leak() {
+        let samples: Vec<(f64, f64)> = (0..120)
+            .map(|t| (t as f64, if t < 110 { 32.5e6 } else { 35.8e6 }))
+            .collect();
+        assert_eq!(slope(&samples), 0.0);
+    }
+
+    #[test]
+    fn an_even_number_of_pairs_takes_the_middle_two() {
+        // Six pairwise slopes: 1, 1.5, 1, 2, 1, 0 -> sorted 0,1,1,1,1.5,2;
+        // the median is the mean of the third and fourth, 1.
+        let samples = [(0.0, 0.0), (1.0, 1.0), (2.0, 3.0), (3.0, 3.0)];
+        assert_eq!(slope(&samples), 1.0);
+        // An odd count takes the middle one: 1, 1.5, 2 -> 1.5.
+        assert_eq!(slope(&samples[..3]), 1.5);
+    }
+
+    #[test]
+    fn fewer_than_two_distinct_times_have_no_slope() {
+        assert_eq!(slope(&[]), 0.0);
+        assert_eq!(slope(&[(1.0, 5.0)]), 0.0);
+        assert_eq!(slope(&[(1.0, 5.0), (1.0, 9.0)]), 0.0);
+    }
 }
