@@ -90,13 +90,19 @@ ci-lint: ## CI: clippy strict (--all-features so feature-gated code is exercised
 	$(CARGO) clippy --workspace --all-features --all-targets -- -D warnings
 
 ci-lockfile-diff: ## CI: assert committed Cargo.lock matches resolution (ADR-0021)
-	@cp Cargo.lock Cargo.lock.committed
-	@$(CARGO) generate-lockfile
-	@diff Cargo.lock.committed Cargo.lock || { \
+	# Assert the committed Cargo.lock is consistent and complete for Cargo.toml
+	# without re-resolving to newer upstream releases. A full re-resolve
+	# (`cargo generate-lockfile` and diff) turns red whenever any transitive
+	# dependency publishes, with nothing wrong in the tree; `--locked` fails only
+	# when the lock genuinely needs updating to satisfy Cargo.toml.
+	@if cargo metadata --locked --format-version 1 >/dev/null; then \
+		echo "Cargo.lock is consistent with Cargo.toml (--locked)."; \
+	else \
 		echo ""; \
-		echo "ERROR: Cargo.lock is out of date. Run: cargo generate-lockfile && git add Cargo.lock"; \
-		mv Cargo.lock.committed Cargo.lock; exit 1; }
-	@mv Cargo.lock.committed Cargo.lock
+		echo "ERROR: Cargo.lock is out of date / inconsistent with Cargo.toml."; \
+		echo "Run: make lockfile && git add Cargo.lock"; \
+		exit 1; \
+	fi
 
 ci-check: ci-format ci-lint ## CI: format + lint (stage 1)
 	@echo "$(GREEN)✅ All code quality checks passed$(RESET)"
