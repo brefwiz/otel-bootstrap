@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] — 2026-09-29
+
+### Added
+
+- **Boot timeline (`otel_bootstrap::boot`).** A service's first seconds run
+  before any exporter exists, so their `tracing` events reached nothing and a
+  span opened then could only be stamped when it was finally recorded. The
+  process-global `Timeline` records each phase's real start and end, writes one
+  `boot phase=… outcome=… took_ms=… at_ms=… service=…` line to stderr the moment
+  it completes, and on `Telemetry::init` exports the buffered phases as spans
+  with their original timestamps under one `boot` root span that runs from
+  process start to `boot::ready()`. Later phases are exported live; flushing is
+  idempotent; the buffer is bounded; with telemetry disabled only the stderr
+  lines are written. A boot that never reaches ready still exports its root,
+  marked `incomplete`, on shutdown.
+
 ## [2.17.0] — 2026-09-24
 
 ### Added

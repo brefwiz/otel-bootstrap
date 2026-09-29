@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.17.0"
+version = "2.18.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -155,6 +155,10 @@ opentelemetry = { version = "0.32", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
+# The boot timeline tests export to an in-process OTLP/gRPC collector, so they
+# prove the timestamps that actually leave the process.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace"] }
+tonic = "0.14"
 
 # Real-process probe for heap profiling. Not shipped to consumers — gated behind
 # profiling-memory-probe, which nothing but CI and local validation enables.

@@ -193,6 +193,35 @@ not hot-reloaded into an already-running telemetry channel — a rotated
 SVID only takes effect on the next process start (pod restart). This is a
 standing platform constraint, not a profiling-specific bug.
 
+## Boot timeline
+
+`otel_bootstrap::boot` times the phases a process runs before it serves,
+including the ones that run before any subscriber or exporter exists.
+
+```rust,ignore
+use otel_bootstrap::boot;
+
+boot::time("config-fetch", fetch_config()).await;
+let phase = boot::phase("load-cache"); // dropped unfinished = failed
+phase.finish();
+boot::ready();
+```
+
+Each phase is written to stderr the moment it completes, one `logfmt` line,
+so a process stuck in boot shows where it got to:
+
+```text
+boot phase=config-fetch outcome=ok took_ms=812 at_ms=2345 service=orders
+boot phase=ready outcome=ok took_ms=3120 at_ms=3120 service=orders
+```
+
+`at_ms` counts from process start (read from `/proc` on Linux). When
+`Telemetry::init` runs, every buffered phase is exported as a span with its
+original start and end, under one `boot` root span that runs from process start
+to `boot::ready()`; later phases are exported as they complete. The timeline is
+process-global and the flush idempotent. With telemetry disabled, only the
+stderr lines are produced.
+
 ## Examples
 
 - [`basic_setup`](examples/basic_setup.rs) — minimal init

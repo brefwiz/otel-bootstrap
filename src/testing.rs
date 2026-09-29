@@ -61,7 +61,12 @@ impl crate::Telemetry {
             .try_init()
             .ok();
 
+        let boot_owner = crate::boot::Timeline::global()
+            .attach(&tracer_provider, service_name)
+            .is_some();
+
         TelemetryHandles {
+            boot_owner,
             tracer_provider,
             meter_provider: Some(meter_provider),
             logger_provider: None,
