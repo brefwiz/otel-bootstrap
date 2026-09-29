@@ -56,8 +56,10 @@ pub async fn telemetry_exporting_to_collector(service: &str) -> (Collector, Tele
     tokio::spawn(server);
 
     // SAFETY: each test binary here holds one test, run in its own process.
+    // The boot log events are at info; the default filter would drop them.
     unsafe {
         std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint);
+        std::env::set_var("RUST_LOG", "info");
     }
     let handles = Telemetry::builder(service)
         .with_protocol(ExportProtocol::Grpc)

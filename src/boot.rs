@@ -138,13 +138,8 @@ pub struct Timeline {
     origin: Instant,
     origin_wall: SystemTime,
     state: Mutex<State>,
-    echo: Echo,
-}
-
-enum Echo {
-    Stderr,
     #[cfg(test)]
-    Capture(Mutex<Vec<String>>),
+    echoed: Mutex<Vec<String>>,
 }
 
 impl Default for Timeline {
@@ -170,7 +165,8 @@ impl Timeline {
             origin,
             origin_wall,
             state: Mutex::new(State::default()),
-            echo: Echo::Stderr,
+            #[cfg(test)]
+            echoed: Mutex::new(Vec::new()),
         }
     }
 
@@ -379,14 +375,9 @@ impl Timeline {
     }
 
     fn echo(&self, line: &str) {
-        match &self.echo {
-            Echo::Stderr => eprintln!("{line}"),
-            #[cfg(test)]
-            Echo::Capture(lines) => lines
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(line.to_owned()),
-        }
+        #[cfg(test)]
+        self.echoed.lock().unwrap().push(line.to_owned());
+        eprintln!("{line}");
     }
 }
 
@@ -625,17 +616,11 @@ mod tests {
     use super::*;
 
     fn capturing() -> Timeline {
-        Timeline {
-            echo: Echo::Capture(Mutex::new(Vec::new())),
-            ..Timeline::new()
-        }
+        Timeline::default()
     }
 
     fn captured(timeline: &Timeline) -> Vec<String> {
-        match &timeline.echo {
-            Echo::Capture(lines) => lines.lock().unwrap().clone(),
-            Echo::Stderr => unreachable!("capturing timeline"),
-        }
+        timeline.echoed.lock().unwrap().clone()
     }
 
     #[test]
@@ -665,12 +650,9 @@ mod tests {
 
         let lines = captured(&timeline);
         assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(
-            lines[0].starts_with("boot phase=ready outcome=ok took_ms="),
-            "{}",
-            lines[0]
-        );
-        assert!(lines[0].ends_with(" service=orders"), "{}", lines[0]);
+        let ready = &lines[0];
+        assert!(ready.starts_with("boot phase=ready outcome=ok took_ms="));
+        assert!(ready.ends_with(" service=orders"));
     }
 
     #[test]
@@ -737,11 +719,7 @@ mod tests {
                 ("cancelled", Outcome::Failed),
             ]
         );
-        assert!(
-            phases[0].took >= Duration::from_millis(20),
-            "{:?}",
-            phases[0]
-        );
+        assert!(phases[0].took >= Duration::from_millis(20));
         assert_eq!(
             phases[0].end.duration_since(phases[0].start).unwrap(),
             phases[0].took
@@ -774,12 +752,8 @@ mod tests {
     fn the_service_falls_back_to_a_derived_name() {
         let timeline = capturing();
         timeline.phase("step").finish();
-        let lines = captured(&timeline);
-        assert!(
-            lines[0].ends_with(&format!(" service={}", default_service_name())),
-            "{}",
-            lines[0]
-        );
+        let expected = format!(" service={}", default_service_name());
+        assert!(captured(&timeline)[0].ends_with(&expected));
         assert!(!default_service_name().is_empty());
     }
 
@@ -787,7 +761,9 @@ mod tests {
     fn the_global_timeline_starts_no_later_than_its_first_use() {
         let before = Instant::now();
         let global = Timeline::global();
-        assert!(global.origin <= before);
+        // Where the process start time is unreadable (a sandbox that
+        // virtualises `/proc/uptime`), the origin is the first use instead.
+        assert!(global.origin <= before || process_age().is_none());
         assert!(std::ptr::eq(global, Timeline::global()));
     }
 
