@@ -42,6 +42,10 @@ async fn phases_are_exported_once_with_their_original_timestamps() {
     assert_eq!(roots.len(), 1, "one root span: {spans:#?}");
     let root = roots[0];
     assert_eq!(string_attribute(root, "boot.outcome"), Some("ready"));
+    assert_eq!(
+        string_attribute(root, "boot.origin"),
+        Some(Timeline::global().origin().as_str())
+    );
 
     let all = Timeline::global().phases();
     assert_eq!(all.len(), 3, "{all:?}");

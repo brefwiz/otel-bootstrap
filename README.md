@@ -212,10 +212,12 @@ so a process stuck in boot shows where it got to:
 
 ```text
 boot phase=config-fetch outcome=ok took_ms=812 at_ms=2345 service=orders
-boot phase=ready outcome=ok took_ms=3120 at_ms=3120 service=orders
+boot phase=ready outcome=ok took_ms=3120 at_ms=3120 origin=process_start service=orders
 ```
 
-`at_ms` counts from process start (read from `/proc` on Linux). When
+`at_ms` counts from process start (read from `/proc` on Linux). Where that is
+unreadable it counts from first use, labelled `origin=first_use` on the ready
+line and `boot.origin` on the root span. When
 `Telemetry::init` runs, every buffered phase is exported as a span with its
 original start and end, under one `boot` root span that runs from process start
 to `boot::ready()`; later phases are exported as they complete. The timeline is
