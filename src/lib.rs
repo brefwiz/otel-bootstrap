@@ -39,6 +39,7 @@ pub mod grpc_middleware;
 pub mod profiling;
 mod runtime_metrics;
 
+pub mod boot;
 pub mod export_backoff;
 pub mod instrumented_port;
 pub mod log_bridge;
@@ -200,6 +201,9 @@ pub struct TelemetryHandles {
     pub meter_provider: Option<SdkMeterProvider>,
     pub logger_provider: Option<SdkLoggerProvider>,
     shutdown_timeout: Duration,
+    /// Whether this init connected the global boot timeline, and so owns
+    /// ending its root span before the tracer provider shuts down.
+    boot_owner: bool,
     #[cfg(feature = "profiling")]
     pub profiling_handle: Option<profiling::ProfilingHandle>,
 }
@@ -236,6 +240,7 @@ impl TelemetryHandles {
     /// handles.shutdown().expect("telemetry shutdown failed");
     /// ```
     pub fn shutdown(&self) -> Result<(), Box<dyn Error>> {
+        self.close_boot();
         if let Err(e) = self.tracer_provider.shutdown() {
             tracing::warn!("tracer provider shutdown error: {e}");
         }
@@ -251,10 +256,18 @@ impl TelemetryHandles {
         }
         Ok(())
     }
+
+    /// A boot that never reached ready still exports its root span.
+    fn close_boot(&self) {
+        if self.boot_owner {
+            boot::Timeline::global().close();
+        }
+    }
 }
 
 impl Drop for TelemetryHandles {
     fn drop(&mut self) {
+        self.close_boot();
         let tracer_provider = self.tracer_provider.clone();
         let meter_provider = self.meter_provider.clone();
         let logger_provider = self.logger_provider.clone();
@@ -1014,11 +1027,17 @@ impl TelemetryBuilder {
             LogFormat::Json => install_subscriber!(tracing_subscriber::fmt::layer().json()),
         }
 
+        // After the subscriber, so the boot phases' log events reach it.
+        let boot_owner = boot::Timeline::global()
+            .attach(&tracer_provider, &service_name)
+            .is_some();
+
         Ok(TelemetryHandles {
             tracer_provider,
             meter_provider,
             logger_provider,
             shutdown_timeout: self.shutdown_timeout,
+            boot_owner,
             #[cfg(feature = "profiling")]
             profiling_handle,
         })
@@ -1391,6 +1410,7 @@ mod tests {
             meter_provider: Some(SdkMeterProvider::builder().build()),
             logger_provider: Some(SdkLoggerProvider::builder().build()),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            boot_owner: false,
             #[cfg(feature = "profiling")]
             profiling_handle: None,
         };
