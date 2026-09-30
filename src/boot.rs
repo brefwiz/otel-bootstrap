@@ -16,11 +16,15 @@
 //!
 //!   ```text
 //!   boot phase=config-fetch outcome=ok took_ms=812 at_ms=2345 service=orders
-//!   boot phase=ready outcome=ok took_ms=3120 at_ms=3120 service=orders
+//!   boot phase=ready outcome=ok took_ms=3120 at_ms=3120 origin=process_start service=orders
 //!   ```
 //!
 //!   `at_ms` is measured from process start, `took_ms` is the phase's own
-//!   duration, and the reserved `phase=ready` line carries the whole boot;
+//!   duration, and the reserved `phase=ready` line carries the whole boot.
+//!   Where the process start cannot be read, the timeline counts from its
+//!   first use instead and says so: `origin=first_use` on the `ready` line
+//!   and `boot.origin` on the root span, so a truncated boot never passes for
+//!   a short one;
 //!
 //! - once [`Timeline::flush`] connects it to a tracer provider (which
 //!   [`crate::TelemetryBuilder::init`] does), exports every buffered phase as a
@@ -133,9 +137,31 @@ struct State {
     root_ended: bool,
 }
 
+/// What a timeline's `at_ms` and root span count from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The process's start, as the platform reports it.
+    ProcessStart,
+    /// The timeline's first use: the process start was unreadable, so the
+    /// boot measured is shorter than the one that happened.
+    FirstUse,
+}
+
+impl Origin {
+    /// The value written as `origin=` and exported as `boot.origin`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProcessStart => "process_start",
+            Self::FirstUse => "first_use",
+        }
+    }
+}
+
 /// A record of boot phases. See the [module documentation](self).
 pub struct Timeline {
     origin: Instant,
+    origin_source: Origin,
     origin_wall: SystemTime,
     state: Mutex<State>,
     #[cfg(test)]
@@ -153,16 +179,17 @@ impl Timeline {
     /// this exists for tests and for embedding a second, independent boot.
     #[must_use]
     pub fn new() -> Self {
-        Self::starting_at(Instant::now())
+        Self::starting_at(Instant::now(), Origin::FirstUse)
     }
 
-    fn starting_at(origin: Instant) -> Self {
+    fn starting_at(origin: Instant, origin_source: Origin) -> Self {
         let now = Instant::now();
         let origin_wall = SystemTime::now()
             .checked_sub(now.saturating_duration_since(origin))
             .unwrap_or_else(SystemTime::now);
         Self {
             origin,
+            origin_source,
             origin_wall,
             state: Mutex::new(State::default()),
             #[cfg(test)]
@@ -176,11 +203,19 @@ impl Timeline {
         static GLOBAL: OnceLock<Timeline> = OnceLock::new();
         GLOBAL.get_or_init(|| {
             let now = Instant::now();
-            let origin = process_age()
+            let (origin, source) = process_age()
                 .and_then(|age| now.checked_sub(age))
-                .unwrap_or(now);
-            Self::starting_at(origin)
+                .map_or((now, Origin::FirstUse), |start| {
+                    (start, Origin::ProcessStart)
+                });
+            Self::starting_at(origin, source)
         })
+    }
+
+    /// What this timeline counts from.
+    #[must_use]
+    pub fn origin(&self) -> Origin {
+        self.origin_source
     }
 
     /// Name the service in the stderr lines. Without it the lines use
@@ -248,7 +283,7 @@ impl Timeline {
         let service = state.service_label();
         drop(state);
 
-        self.echo(&line(READY, Outcome::Ok, at, at, &service));
+        self.echo(&ready_line(at, self.origin_source, &service));
         if let Some((exporter, count, dropped)) = end_root {
             end_root_span(&exporter, wall, "ready", count, dropped);
             tracing::info!(
@@ -283,7 +318,8 @@ impl Timeline {
         let root_span = tracer.build_with_context(
             SpanBuilder::from_name(ROOT_SPAN)
                 .with_kind(SpanKind::Internal)
-                .with_start_time(self.origin_wall),
+                .with_start_time(self.origin_wall)
+                .with_attributes([KeyValue::new("boot.origin", self.origin_source.as_str())]),
             &Context::new(),
         );
         let exporter = Exporter {
@@ -530,6 +566,17 @@ fn line(name: &str, outcome: Outcome, took: Duration, at: Duration, service: &st
     out
 }
 
+/// The milestone line: the whole boot, and what it was counted from.
+fn ready_line(at: Duration, origin: Origin, service: &str) -> String {
+    let mut out = format!(
+        "boot phase={READY} outcome=ok took_ms={ms} at_ms={ms} origin={} service=",
+        origin.as_str(),
+        ms = millis(at),
+    );
+    push_value(&mut out, service);
+    out
+}
+
 /// A `logfmt` value, quoted when it would otherwise not parse back.
 fn push_value(out: &mut String, value: &str) {
     let bare = !value.is_empty()
@@ -652,6 +699,7 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         let ready = &lines[0];
         assert!(ready.starts_with("boot phase=ready outcome=ok took_ms="));
+        assert!(ready.contains(" origin=first_use service="));
         assert!(ready.ends_with(" service=orders"));
     }
 
@@ -764,6 +812,9 @@ mod tests {
         // Where the process start time is unreadable (a sandbox that
         // virtualises `/proc/uptime`), the origin is the first use instead.
         assert!(global.origin <= before || process_age().is_none());
+        let expected =
+            [Origin::FirstUse, Origin::ProcessStart][usize::from(process_age().is_some())];
+        assert_eq!(global.origin(), expected);
         assert!(std::ptr::eq(global, Timeline::global()));
     }
 
