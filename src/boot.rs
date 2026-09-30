@@ -811,7 +811,11 @@ mod tests {
         let global = Timeline::global();
         // Where the process start time is unreadable (a sandbox that
         // virtualises `/proc/uptime`), the origin is the first use instead.
-        assert!(global.origin <= before || process_age().is_none());
+        // The process age is read at kernel tick resolution (10 ms for the
+        // start time, 10 ms for uptime), so a process that has run for less
+        // than that can put its origin up to one resolution after `before`.
+        let resolution = Duration::from_millis(20);
+        assert!(global.origin <= before + resolution || process_age().is_none());
         let expected =
             [Origin::FirstUse, Origin::ProcessStart][usize::from(process_age().is_some())];
         assert_eq!(global.origin(), expected);
