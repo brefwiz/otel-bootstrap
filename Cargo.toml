@@ -95,7 +95,7 @@ opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing = "0.1"
-opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
 hostname = "0.4"
 url = "2.5"
 axum = { version = "=0.8", optional = true }
