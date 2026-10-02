@@ -84,7 +84,7 @@ profiling-rss-probe = ["profiling-bridge-pyroscope-rs", "tokio/rt-multi-thread",
 
 [dependencies]
 opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
-opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio"] }
+opentelemetry_sdk = { version = "0.33", features = ["metrics", "logs", "rt-tokio"] }
 # Already a hard runtime dependency via opentelemetry_sdk's `rt-tokio`: the
 # metrics PeriodicReader needs a Tokio runtime to export at all. Declared
 # explicitly so `runtime_metrics` can read Handle/RuntimeMetrics and spawn the
