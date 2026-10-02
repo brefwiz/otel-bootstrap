@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] — 2026-10-02
+
+### Added
+
+- **Live-sourced mTLS for the gRPC exporters.** `with_mtls` snapshots the
+  client certificate, key and trust bundle once at `init`, so a rotating
+  workload identity expired inside long-lived processes and a process that
+  started before its identity agent answered was left with no credentials.
+  The `CertSource` trait (`fn current(&self) -> Option<MtlsMaterial>`) plus
+  `TelemetryBuilder::with_mtls_source` hand the three OTLP exporters one lazily
+  connecting channel whose connector asks the source for current material on
+  every new connection: a reconnect after rotation presents the rotated
+  certificate and trusts the rotated bundle, and a source with nothing yet only
+  delays the first connection. The trust bundle may hold several certificates;
+  each becomes an anchor. `StaticCertSource` wraps fixed material. `with_mtls`
+  is unchanged.
+
 ## [2.18.1] — 2026-09-30
 
 ### Fixed
