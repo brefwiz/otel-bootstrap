@@ -83,7 +83,7 @@ profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator", 
 profiling-rss-probe = ["profiling-bridge-pyroscope-rs", "tokio/rt-multi-thread", "dep:flate2"]
 
 [dependencies]
-opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
+opentelemetry = { version = "0.33", features = ["metrics", "logs"] }
 opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio"] }
 # Already a hard runtime dependency via opentelemetry_sdk's `rt-tokio`: the
 # metrics PeriodicReader needs a Tokio runtime to export at all. Declared
@@ -155,7 +155,7 @@ required-features = ["testing"]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 serde_yaml = "0.9"
-opentelemetry = { version = "0.32", features = ["trace"] }
+opentelemetry = { version = "0.33", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
