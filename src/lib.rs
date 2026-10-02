@@ -42,6 +42,10 @@ mod runtime_metrics;
 pub mod boot;
 pub mod export_backoff;
 pub mod instrumented_port;
+#[cfg(feature = "grpc-mtls")]
+mod rotating_mtls;
+#[cfg(feature = "grpc-mtls")]
+pub use rotating_mtls::{CertSource, StaticCertSource};
 pub mod log_bridge;
 pub mod span_enrichment;
 pub mod spanned;
@@ -337,10 +341,10 @@ pub enum ExportProtocol {
 /// PEM-encoded. The CA is used to verify the collector's server cert; the
 /// client cert + key authenticate this workload to the collector.
 ///
-/// To use a static (no-rotation) source, wrap in [`StaticCertSource`] and
-/// pass to [`TelemetryBuilder::with_mtls`]. For SVID-style rotation, plug
-/// in your own [`CertSource`] implementation (e.g. service-kit's
-/// `SpiffeCertSource`).
+/// Pass it to [`TelemetryBuilder::with_mtls`] for a fixed snapshot, or wrap it
+/// in [`StaticCertSource`]. For SVID-style rotation implement [`CertSource`]
+/// (service-kit does, on its `SvidWatcher`) and use
+/// [`TelemetryBuilder::with_mtls_source`].
 #[cfg(feature = "grpc-mtls")]
 #[derive(Clone)]
 pub struct MtlsMaterial {
@@ -417,6 +421,8 @@ impl Telemetry {
             runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
+            #[cfg(feature = "grpc-mtls")]
+            mtls_source: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
             #[cfg(feature = "profiling")]
             pyroscope_endpoint: None,
@@ -453,6 +459,8 @@ impl Telemetry {
             runtime_metrics: true,
             #[cfg(feature = "grpc-mtls")]
             mtls: None,
+            #[cfg(feature = "grpc-mtls")]
+            mtls_source: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
             #[cfg(feature = "profiling")]
             pyroscope_endpoint: None,
@@ -499,6 +507,8 @@ pub struct TelemetryBuilder {
     runtime_metrics: bool,
     #[cfg(feature = "grpc-mtls")]
     mtls: Option<MtlsMaterial>,
+    #[cfg(feature = "grpc-mtls")]
+    mtls_source: Option<std::sync::Arc<dyn CertSource>>,
     propagated_span_fields: &'static [&'static str],
     #[cfg(feature = "profiling")]
     pyroscope_endpoint: Option<String>,
@@ -552,21 +562,36 @@ impl TelemetryBuilder {
     ///
     /// # Rotation
     ///
-    /// In-process auto-rotation is **not yet implemented** — when the
-    /// underlying SVID rotates (typically every 1h), the existing tonic
-    /// Channel keeps presenting the old cert and exports start failing.
-    /// Two-part mitigation until a proper rotation watcher lands:
-    ///
-    /// 1. Issue long-lived client certs (≥365 days) so manual rotation is
-    ///    infrequent.
-    /// 2. Rely on natural pod restarts (deploys, reschedules) to pick up
-    ///    fresh material — every restart re-reads the SVID at this call.
-    ///
-    /// Rotation as a first-class feature is tracked as an immediate
-    /// follow-up (see CHANGELOG).
+    /// This is a snapshot: when the underlying SVID rotates (typically every
+    /// 1h) the channel keeps presenting the old certificate and exports start
+    /// failing. A workload whose identity rotates should use
+    /// [`with_mtls_source`](Self::with_mtls_source) instead.
     #[cfg(feature = "grpc-mtls")]
     pub fn with_mtls(mut self, material: MtlsMaterial) -> Self {
         self.mtls = Some(material);
+        self.mtls_source = None;
+        self.protocol = Some(ExportProtocol::Grpc);
+        self
+    }
+
+    /// Enable mTLS on the gRPC OTLP exporter with material taken from a
+    /// [`CertSource`] on every new connection (requires the `grpc-mtls`
+    /// feature).
+    ///
+    /// Unlike [`with_mtls`](Self::with_mtls), nothing is snapshotted: a
+    /// reconnect after the identity rotated presents the rotated certificate
+    /// and trusts the rotated bundle, and a source that has nothing yet at
+    /// start-up only delays the first connection (the channel retries with
+    /// backoff) instead of leaving the exporter without credentials. The
+    /// endpoint's scheme is ignored; the connection is always mutual TLS.
+    ///
+    /// Replaces any earlier [`with_mtls`](Self::with_mtls). Forces the
+    /// protocol to [`ExportProtocol::Grpc`]. Must be followed by `init` inside
+    /// a Tokio runtime.
+    #[cfg(feature = "grpc-mtls")]
+    pub fn with_mtls_source(mut self, source: std::sync::Arc<dyn CertSource>) -> Self {
+        self.mtls_source = Some(source);
+        self.mtls = None;
         self.protocol = Some(ExportProtocol::Grpc);
         self
     }
@@ -795,7 +820,8 @@ impl TelemetryBuilder {
     ///     .expect("telemetry init failed");
     /// handles.shutdown().ok();
     /// ```
-    pub fn init(self) -> Result<TelemetryHandles, Box<dyn Error>> {
+    #[cfg_attr(not(feature = "grpc-mtls"), allow(unused_mut))]
+    pub fn init(mut self) -> Result<TelemetryHandles, Box<dyn Error>> {
         let log_filter = match self.log_filter.as_deref() {
             Some(directive) => tracing_subscriber::EnvFilter::try_new(directive)?,
             None => tracing_subscriber::EnvFilter::from_default_env(),
@@ -849,13 +875,21 @@ impl TelemetryBuilder {
             None => sampler_from_env()?.unwrap_or(TraceSampler::AlwaysOn),
         };
 
+        #[cfg(feature = "grpc-mtls")]
+        let mtls_transport = MtlsTransport::resolve(
+            self.mtls.take(),
+            self.mtls_source.take(),
+            &endpoint,
+            export_timeout,
+        )?;
+
         // Tracer
         let trace_exporter = build_span_exporter(
             protocol,
             &endpoint,
             export_timeout,
             #[cfg(feature = "grpc-mtls")]
-            self.mtls.as_ref(),
+            mtls_transport.as_ref(),
         )?;
 
         let batch_processor = if let Some(size) = self.max_export_batch_size {
@@ -892,7 +926,7 @@ impl TelemetryBuilder {
                 &endpoint,
                 export_timeout,
                 #[cfg(feature = "grpc-mtls")]
-                self.mtls.as_ref(),
+                mtls_transport.as_ref(),
             )?;
 
             let periodic_reader = if let Some(interval) = self.metric_export_interval {
@@ -932,7 +966,7 @@ impl TelemetryBuilder {
                 &endpoint,
                 export_timeout,
                 #[cfg(feature = "grpc-mtls")]
-                self.mtls.as_ref(),
+                mtls_transport.as_ref(),
             )?;
 
             let lp = SdkLoggerProvider::builder()
@@ -1096,6 +1130,42 @@ fn timeout_from_env() -> Option<Duration> {
     Some(Duration::from_millis(ms))
 }
 
+/// How the gRPC exporters get their TLS: a one-shot snapshot, or one channel
+/// whose every connection asks a [`CertSource`] for current material. Built
+/// once in `init` so all three exporters share it.
+#[cfg(feature = "grpc-mtls")]
+enum MtlsTransport {
+    Snapshot(MtlsMaterial),
+    Live(tonic::transport::Channel),
+}
+
+#[cfg(feature = "grpc-mtls")]
+impl MtlsTransport {
+    fn resolve(
+        material: Option<MtlsMaterial>,
+        source: Option<std::sync::Arc<dyn CertSource>>,
+        endpoint: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Self>, Box<dyn Error>> {
+        match (source, material) {
+            (Some(source), _) => {
+                let channel = rotating_mtls::channel(endpoint, source, timeout)
+                    .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+                Ok(Some(Self::Live(channel)))
+            }
+            (None, Some(material)) => Ok(Some(Self::Snapshot(material))),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn apply<B: opentelemetry_otlp::WithTonicConfig>(&self, builder: B) -> B {
+        match self {
+            Self::Snapshot(material) => builder.with_tls_config(build_tls_config(material)),
+            Self::Live(channel) => builder.with_channel(channel.clone()),
+        }
+    }
+}
+
 /// Build a `tonic::transport::ClientTlsConfig` from PEM material.
 /// Centralised so the three exporter builders apply identical TLS config.
 ///
@@ -1129,7 +1199,7 @@ fn build_span_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
-    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -1142,8 +1212,7 @@ fn build_span_exporter(
             }
             #[cfg(feature = "grpc-mtls")]
             if let Some(m) = mtls {
-                use opentelemetry_otlp::WithTonicConfig as _;
-                b = b.with_tls_config(build_tls_config(m));
+                b = m.apply(b);
             }
             Ok(b.build()?)
         }
@@ -1164,7 +1233,7 @@ fn build_metric_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
-    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::MetricExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -1177,8 +1246,7 @@ fn build_metric_exporter(
             }
             #[cfg(feature = "grpc-mtls")]
             if let Some(m) = mtls {
-                use opentelemetry_otlp::WithTonicConfig as _;
-                b = b.with_tls_config(build_tls_config(m));
+                b = m.apply(b);
             }
             Ok(b.build()?)
         }
@@ -1199,7 +1267,7 @@ fn build_log_exporter(
     protocol: ExportProtocol,
     endpoint: &str,
     timeout: Option<Duration>,
-    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsMaterial>,
+    #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::LogExporter, Box<dyn Error>> {
     match protocol {
         #[cfg(feature = "grpc")]
@@ -1212,8 +1280,7 @@ fn build_log_exporter(
             }
             #[cfg(feature = "grpc-mtls")]
             if let Some(m) = mtls {
-                use opentelemetry_otlp::WithTonicConfig as _;
-                b = b.with_tls_config(build_tls_config(m));
+                b = m.apply(b);
             }
             Ok(b.build()?)
         }
