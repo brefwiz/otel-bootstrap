@@ -98,7 +98,7 @@ tracing = "0.1"
 opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
 hostname = "0.4"
 url = "2.5"
-axum = { version = "=0.8", optional = true }
+axum = { version = "^0.8", optional = true }
 tower = { version = "0.5", optional = true }
 # Used for ClientTlsConfig under grpc-mtls, and for Channel/Server under
 # tonic-tracing. tls-roots gives a default webpki trust root; we override
