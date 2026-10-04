@@ -19,7 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["grpc"]
-grpc = ["opentelemetry-otlp/grpc-tonic", "opentelemetry-otlp/experimental-grpc-retry"]
+grpc = ["opentelemetry-otlp/grpc-tonic"]
 # mTLS for the gRPC transport. Implies grpc; pulls in tonic with TLS support.
 # Callers supply PEM material via TelemetryBuilder::with_mtls(MtlsMaterial).
 # `with_mtls` reads its material once at init; `with_mtls_source` takes it from
@@ -90,11 +90,6 @@ opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio
 # explicitly so `runtime_metrics` can read Handle/RuntimeMetrics and spawn the
 # scheduler probe without relying on a transitive feature staying enabled.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
-# `experimental-grpc-retry` is what makes a gRPC export attempt more than one:
-# without it a batch whose first connect is refused (a pod's network not yet
-# programmed for the collector's Service, say) is dropped, and the boot-time
-# logs it carried never reach the collector. Only a refused or unavailable
-# transport is retried, a few times over about a second.
 opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
