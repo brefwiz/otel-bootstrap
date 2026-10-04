@@ -49,7 +49,11 @@ impl<E> RetryUnavailable<E> {
 
     async fn pause(&self, delay: Duration) {
         if let Some(runtime) = &self.runtime {
-            let _ = runtime.spawn(tokio::time::sleep(delay)).await;
+            // The timer is created inside the task: building it here, on a
+            // thread with no runtime entered, panics.
+            let _ = runtime
+                .spawn(async move { tokio::time::sleep(delay).await })
+                .await;
         }
     }
 }
