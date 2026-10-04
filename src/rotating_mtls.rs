@@ -23,7 +23,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio::net::TcpStream;
 use tonic::codegen::http::Uri;
 use tonic::transport::{Channel, Endpoint};
-use x509_parser::extensions::GeneralName;
+use x509_cert::Certificate;
+use x509_cert::der::Decode as _;
+use x509_cert::ext::pkix::{SubjectAltName, name::GeneralName};
 
 use crate::MtlsMaterial;
 
@@ -108,19 +110,20 @@ fn require_spiffe_id(peer: Option<&[CertificateDer<'_>]>, expected: &str) -> Res
     let leaf = peer
         .and_then(<[_]>::first)
         .ok_or("collector presented no certificate")?;
-    let (_, cert) = x509_parser::parse_x509_certificate(leaf.as_ref())
+    let cert = Certificate::from_der(leaf.as_ref())
         .map_err(|e| format!("collector certificate is not parseable: {e}"))?;
     let mut found = Vec::new();
-    if let Some(san) = cert
-        .subject_alternative_name()
+    if let Some((_, san)) = cert
+        .tbs_certificate
+        .get::<SubjectAltName>()
         .map_err(|e| format!("collector certificate has a malformed SAN: {e}"))?
     {
-        for name in &san.value.general_names {
-            if let GeneralName::URI(uri) = name {
-                if *uri == expected {
+        for name in &san.0 {
+            if let GeneralName::UniformResourceIdentifier(uri) = name {
+                if uri.as_str() == expected {
                     return Ok(());
                 }
-                found.push(*uri);
+                found.push(uri.as_str().to_owned());
             }
         }
     }
@@ -443,8 +446,14 @@ mod tests {
         assert_eq!(got.client_cert_chain_pem, m.client_cert_chain_pem);
     }
 
-    /// A throwaway PKI whose collector leaf carries `server_uri` (when given)
-    /// as a URI SAN beside `DNS:localhost`.
+    // Throwaway PKI under tests/fixtures/mtls/pinned (EC P-256, 100-year
+    // validity, keys that protect nothing): a CA, a client leaf, and three
+    // collector leaves for `localhost` -- one carrying the collector's SPIFFE ID,
+    // one carrying another, one carrying none.
+    const PINNED_CA: &str = include_str!("../tests/fixtures/mtls/pinned/ca.pem");
+    const PINNED_CLIENT_CERT: &str = include_str!("../tests/fixtures/mtls/pinned/client.pem");
+    const PINNED_CLIENT_KEY: &str = include_str!("../tests/fixtures/mtls/pinned/client.key");
+
     struct Pki {
         ca: String,
         server_cert: String,
@@ -453,35 +462,25 @@ mod tests {
     }
 
     fn pki(server_uri: Option<&str>) -> Pki {
-        use rcgen::{
-            BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, Ia5String, IsCa, KeyPair,
-            SanType,
+        let (server_cert, server_key) = match server_uri {
+            Some(COLLECTOR_ID) => (
+                include_str!("../tests/fixtures/mtls/pinned/server-match.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-match.key"),
+            ),
+            Some(_) => (
+                include_str!("../tests/fixtures/mtls/pinned/server-other.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-other.key"),
+            ),
+            None => (
+                include_str!("../tests/fixtures/mtls/pinned/server-nouri.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-nouri.key"),
+            ),
         };
-        let ca_key = KeyPair::generate().unwrap();
-        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca = ca_params.self_signed(&ca_key).unwrap();
-
-        let server_key = KeyPair::generate().unwrap();
-        let mut server_params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
-        server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        if let Some(uri) = server_uri {
-            server_params
-                .subject_alt_names
-                .push(SanType::URI(Ia5String::try_from(uri.to_owned()).unwrap()));
-        }
-        let server = server_params.signed_by(&server_key, &ca, &ca_key).unwrap();
-
-        let client_key = KeyPair::generate().unwrap();
-        let mut client_params = CertificateParams::new(vec!["client".to_owned()]).unwrap();
-        client_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-        let client = client_params.signed_by(&client_key, &ca, &ca_key).unwrap();
-
         Pki {
-            ca: ca.pem(),
-            server_cert: server.pem(),
-            server_key: server_key.serialize_pem(),
-            client: material(&client.pem(), &client_key.serialize_pem(), &ca.pem()),
+            ca: PINNED_CA.to_owned(),
+            server_cert: server_cert.to_owned(),
+            server_key: server_key.to_owned(),
+            client: material(PINNED_CLIENT_CERT, PINNED_CLIENT_KEY, PINNED_CA),
         }
     }
 
