@@ -83,3 +83,15 @@ async fn a_snapshot_replaces_an_earlier_live_source() {
         .init()
         .expect("snapshot mTLS init");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pinned_collector_identity_builds_all_three_exporters_over_a_snapshot() {
+    let handles = Telemetry::builder("mtls-pinned-snapshot")
+        .with_default_endpoint(NOWHERE)
+        .with_mtls(material())
+        .with_collector_spiffe_id("spiffe://brefwiz.e2e/otel-collector")
+        .init()
+        .expect("a snapshot with a pinned identity is carried by the checking connector");
+    assert!(handles.meter_provider.is_some());
+    assert!(handles.logger_provider.is_some());
+}
