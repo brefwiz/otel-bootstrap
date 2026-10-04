@@ -12,7 +12,7 @@
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -23,6 +23,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio::net::TcpStream;
 use tonic::codegen::http::Uri;
 use tonic::transport::{Channel, Endpoint};
+use x509_cert::Certificate;
+use x509_cert::der::Decode as _;
+use x509_cert::ext::pkix::{SubjectAltName, name::GeneralName};
 
 use crate::MtlsMaterial;
 
@@ -91,15 +94,54 @@ fn client_config(material: &MtlsMaterial) -> Result<rustls::ClientConfig, BoxErr
 
 /// Dials the endpoint's host and runs mutual TLS with whatever the
 /// [`CertSource`] holds at that moment.
+///
+/// When `expected_id` is set the collector must also present that SPIFFE ID as
+/// a URI SAN; a certificate that chains to the bundle and names the right host
+/// but carries another identity is refused. Without it only the chain and the
+/// DNS name are checked.
 #[derive(Clone)]
 pub(crate) struct RotatingConnector {
     source: Arc<dyn CertSource>,
+    expected_id: Option<Arc<str>>,
+}
+
+/// Fails unless the peer's leaf certificate carries `expected` as a URI SAN.
+fn require_spiffe_id(peer: Option<&[CertificateDer<'_>]>, expected: &str) -> Result<(), BoxError> {
+    let leaf = peer
+        .and_then(<[_]>::first)
+        .ok_or("collector presented no certificate")?;
+    let cert = Certificate::from_der(leaf.as_ref())
+        .map_err(|e| format!("collector certificate is not parseable: {e}"))?;
+    let mut found = Vec::new();
+    if let Some((_, san)) = cert
+        .tbs_certificate
+        .get::<SubjectAltName>()
+        .map_err(|e| format!("collector certificate has a malformed SAN: {e}"))?
+    {
+        for name in &san.0 {
+            if let GeneralName::UniformResourceIdentifier(uri) = name {
+                if uri.as_str() == expected {
+                    return Ok(());
+                }
+                found.push(uri.as_str().to_owned());
+            }
+        }
+    }
+    Err(format!(
+        "collector identity mismatch: expected {expected}, certificate carries [{}]",
+        found.join(", ")
+    )
+    .into())
 }
 
 type TlsIo = TokioIo<tokio_rustls::client::TlsStream<TcpStream>>;
 
 impl RotatingConnector {
-    async fn connect(source: Arc<dyn CertSource>, uri: Uri) -> Result<TlsIo, BoxError> {
+    async fn connect(
+        source: Arc<dyn CertSource>,
+        expected_id: Option<Arc<str>>,
+        uri: Uri,
+    ) -> Result<TlsIo, BoxError> {
         let host = uri.host().ok_or("OTLP endpoint has no host")?.to_owned();
         let port = uri.port_u16().unwrap_or(443);
         let material = source
@@ -112,6 +154,18 @@ impl RotatingConnector {
         let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
             .connect(name, tcp)
             .await?;
+        match expected_id {
+            Some(id) => require_spiffe_id(tls.get_ref().1.peer_certificates(), &id)?,
+            None => {
+                static UNPINNED: Once = Once::new();
+                UNPINNED.call_once(|| {
+                    tracing::warn!(
+                        "OTLP collector identity is not pinned: its certificate is trusted on \
+                         chain and DNS name only"
+                    );
+                });
+            }
+        }
         Ok(TokioIo::new(tls))
     }
 }
@@ -126,7 +180,11 @@ impl tower::Service<Uri> for RotatingConnector {
     }
 
     fn call(&mut self, uri: Uri) -> Self::Future {
-        Box::pin(Self::connect(Arc::clone(&self.source), uri))
+        Box::pin(Self::connect(
+            Arc::clone(&self.source),
+            self.expected_id.clone(),
+            uri,
+        ))
     }
 }
 
@@ -139,6 +197,7 @@ pub(crate) fn channel(
     endpoint: &str,
     source: Arc<dyn CertSource>,
     timeout: Option<Duration>,
+    expected_id: Option<&str>,
 ) -> Result<Channel, BoxError> {
     let parsed: Uri = endpoint.parse()?;
     let authority = parsed
@@ -150,7 +209,10 @@ pub(crate) fn channel(
     if let Some(t) = timeout {
         ep = ep.timeout(t);
     }
-    Ok(ep.connect_with_connector_lazy(RotatingConnector { source }))
+    Ok(ep.connect_with_connector_lazy(RotatingConnector {
+        source,
+        expected_id: expected_id.map(Arc::from),
+    }))
 }
 
 #[cfg(test)]
@@ -192,9 +254,17 @@ mod tests {
     /// A TLS server that requires a client certificate signed by the CA and
     /// records the leaf it was shown on every connection.
     async fn server() -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
+        server_with(SERVER_CERT, SERVER_KEY, CA).await
+    }
+
+    async fn server_with(
+        server_cert: &str,
+        server_key: &str,
+        client_ca: &str,
+    ) -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
         let mut roots = RootCertStore::empty();
         roots
-            .add(CertificateDer::from_pem_slice(CA.as_bytes()).unwrap())
+            .add(CertificateDer::from_pem_slice(client_ca.as_bytes()).unwrap())
             .unwrap();
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(roots),
@@ -209,10 +279,10 @@ mod tests {
         .unwrap()
         .with_client_cert_verifier(verifier)
         .with_single_cert(
-            CertificateDer::pem_slice_iter(SERVER_CERT.as_bytes())
+            CertificateDer::pem_slice_iter(server_cert.as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap(),
-            PrivateKeyDer::from_pem_slice(SERVER_KEY.as_bytes()).unwrap(),
+            PrivateKeyDer::from_pem_slice(server_key.as_bytes()).unwrap(),
         )
         .unwrap();
         config.alpn_protocols = vec![b"h2".to_vec()];
@@ -269,6 +339,7 @@ mod tests {
         let source = Arc::new(Swappable(Mutex::new(Some(client_one()))));
         let mut connector = RotatingConnector {
             source: Arc::clone(&source) as Arc<dyn CertSource>,
+            expected_id: None,
         };
 
         std::future::poll_fn(|cx| connector.poll_ready(cx))
@@ -297,6 +368,7 @@ mod tests {
         let source = Arc::new(Swappable(Mutex::new(None)));
         let mut connector = RotatingConnector {
             source: Arc::clone(&source) as Arc<dyn CertSource>,
+            expected_id: None,
         };
 
         let err = connector
@@ -328,6 +400,7 @@ mod tests {
                 CLIENT_ONE_KEY,
                 &bundle,
             ))),
+            expected_id: None,
         };
         drop(
             connector
@@ -346,6 +419,7 @@ mod tests {
                 CLIENT_ONE_KEY,
                 STRANGER_CA,
             ))),
+            expected_id: None,
         };
         assert!(connector.call(uri(port)).await.is_err());
     }
@@ -372,15 +446,120 @@ mod tests {
         assert_eq!(got.client_cert_chain_pem, m.client_cert_chain_pem);
     }
 
+    // Throwaway PKI under tests/fixtures/mtls/pinned (EC P-256, 100-year
+    // validity, keys that protect nothing): a CA, a client leaf, and three
+    // collector leaves for `localhost` -- one carrying the collector's SPIFFE ID,
+    // one carrying another, one carrying none.
+    const PINNED_CA: &str = include_str!("../tests/fixtures/mtls/pinned/ca.pem");
+    const PINNED_CLIENT_CERT: &str = include_str!("../tests/fixtures/mtls/pinned/client.pem");
+    const PINNED_CLIENT_KEY: &str = include_str!("../tests/fixtures/mtls/pinned/client.key");
+
+    struct Pki {
+        ca: String,
+        server_cert: String,
+        server_key: String,
+        client: MtlsMaterial,
+    }
+
+    fn pki(server_uri: Option<&str>) -> Pki {
+        let (server_cert, server_key) = match server_uri {
+            Some(COLLECTOR_ID) => (
+                include_str!("../tests/fixtures/mtls/pinned/server-match.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-match.key"),
+            ),
+            Some(_) => (
+                include_str!("../tests/fixtures/mtls/pinned/server-other.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-other.key"),
+            ),
+            None => (
+                include_str!("../tests/fixtures/mtls/pinned/server-nouri.pem"),
+                include_str!("../tests/fixtures/mtls/pinned/server-nouri.key"),
+            ),
+        };
+        Pki {
+            ca: PINNED_CA.to_owned(),
+            server_cert: server_cert.to_owned(),
+            server_key: server_key.to_owned(),
+            client: material(PINNED_CLIENT_CERT, PINNED_CLIENT_KEY, PINNED_CA),
+        }
+    }
+
+    const COLLECTOR_ID: &str = "spiffe://brefwiz.e2e/otel-collector";
+
+    fn pinned(pki: &Pki, expected: Option<&str>) -> RotatingConnector {
+        RotatingConnector {
+            source: Arc::new(StaticCertSource::new(pki.client.clone())),
+            expected_id: expected.map(Arc::from),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_collector_carrying_the_expected_spiffe_id_is_accepted() {
+        let pki = pki(Some(COLLECTOR_ID));
+        let (port, _seen) = server_with(&pki.server_cert, &pki.server_key, &pki.ca).await;
+        drop(
+            pinned(&pki, Some(COLLECTOR_ID))
+                .call(uri(port))
+                .await
+                .expect("matching identity"),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_collector_with_another_spiffe_id_is_refused_though_chain_and_dns_hold() {
+        let pki = pki(Some("spiffe://brefwiz.e2e/impostor"));
+        let (port, _seen) = server_with(&pki.server_cert, &pki.server_key, &pki.ca).await;
+        // The same certificate is accepted when nothing is pinned, so the
+        // refusal below is the identity check and nothing else.
+        drop(
+            pinned(&pki, None)
+                .call(uri(port))
+                .await
+                .expect("chain and DNS name are valid"),
+        );
+        let err = pinned(&pki, Some(COLLECTOR_ID))
+            .call(uri(port))
+            .await
+            .err()
+            .expect("identity mismatch must be refused");
+        assert!(err.to_string().contains("identity mismatch"), "{err}");
+        assert!(err.to_string().contains("impostor"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_collector_with_no_spiffe_id_is_refused_when_one_is_expected() {
+        let pki = pki(None);
+        let (port, _seen) = server_with(&pki.server_cert, &pki.server_key, &pki.ca).await;
+        let err = pinned(&pki, Some(COLLECTOR_ID))
+            .call(uri(port))
+            .await
+            .err()
+            .expect("a certificate without the identity must be refused");
+        assert!(err.to_string().contains("identity mismatch"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn without_an_expected_id_chain_and_dns_name_are_enough() {
+        let pki = pki(None);
+        let (port, _seen) = server_with(&pki.server_cert, &pki.server_key, &pki.ca).await;
+        drop(
+            pinned(&pki, None)
+                .call(uri(port))
+                .await
+                .expect("legacy path is unchanged"),
+        );
+    }
+
     #[tokio::test]
     async fn channel_rejects_an_endpoint_without_a_host() {
         let source: Arc<dyn CertSource> = Arc::new(Swappable(Mutex::new(None)));
-        assert!(channel("not a uri", Arc::clone(&source), None).is_err());
+        assert!(channel("not a uri", Arc::clone(&source), None, None).is_err());
         assert!(
             channel(
                 "https://collector.example:4320",
                 source,
-                Some(Duration::from_secs(3))
+                Some(Duration::from_secs(3)),
+                None,
             )
             .is_ok()
         );

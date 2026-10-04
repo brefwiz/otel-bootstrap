@@ -423,6 +423,8 @@ impl Telemetry {
             mtls: None,
             #[cfg(feature = "grpc-mtls")]
             mtls_source: None,
+            #[cfg(feature = "grpc-mtls")]
+            collector_spiffe_id: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
             #[cfg(feature = "profiling")]
             pyroscope_endpoint: None,
@@ -461,6 +463,8 @@ impl Telemetry {
             mtls: None,
             #[cfg(feature = "grpc-mtls")]
             mtls_source: None,
+            #[cfg(feature = "grpc-mtls")]
+            collector_spiffe_id: None,
             propagated_span_fields: crate::log_bridge::PROPAGATED_SPAN_FIELDS,
             #[cfg(feature = "profiling")]
             pyroscope_endpoint: None,
@@ -509,6 +513,8 @@ pub struct TelemetryBuilder {
     mtls: Option<MtlsMaterial>,
     #[cfg(feature = "grpc-mtls")]
     mtls_source: Option<std::sync::Arc<dyn CertSource>>,
+    #[cfg(feature = "grpc-mtls")]
+    collector_spiffe_id: Option<String>,
     propagated_span_fields: &'static [&'static str],
     #[cfg(feature = "profiling")]
     pyroscope_endpoint: Option<String>,
@@ -593,6 +599,24 @@ impl TelemetryBuilder {
         self.mtls_source = Some(source);
         self.mtls = None;
         self.protocol = Some(ExportProtocol::Grpc);
+        self
+    }
+
+    /// Require the collector to present `id` as a URI SAN (requires the
+    /// `grpc-mtls` feature).
+    ///
+    /// Without it the collector is trusted on its certificate chain and DNS
+    /// name alone, which any workload holding a certificate from the same
+    /// trust bundle and the right name can satisfy. The identity is metadata
+    /// of the collector deployment, so it belongs with the endpoint it
+    /// describes: pass the ID the platform published for the endpoint, never a
+    /// value the application invents. A connection to a collector carrying any
+    /// other identity is refused before a byte of telemetry is sent. Has no
+    /// effect without [`with_mtls`](Self::with_mtls) or
+    /// [`with_mtls_source`](Self::with_mtls_source).
+    #[cfg(feature = "grpc-mtls")]
+    pub fn with_collector_spiffe_id(mut self, id: impl Into<String>) -> Self {
+        self.collector_spiffe_id = Some(id.into());
         self
     }
 
@@ -881,6 +905,7 @@ impl TelemetryBuilder {
             self.mtls_source.take(),
             &endpoint,
             export_timeout,
+            self.collector_spiffe_id.as_deref(),
         )?;
 
         // Tracer
@@ -1146,10 +1171,21 @@ impl MtlsTransport {
         source: Option<std::sync::Arc<dyn CertSource>>,
         endpoint: &str,
         timeout: Option<Duration>,
+        expected_id: Option<&str>,
     ) -> Result<Option<Self>, Box<dyn Error>> {
+        // A pinned identity is checked by the connector, which a snapshot's
+        // tonic channel does not use: wrap the snapshot as a fixed source.
+        let source = match (source, material.as_ref(), expected_id) {
+            (Some(source), _, _) => Some(source),
+            (None, Some(material), Some(_)) => {
+                Some(std::sync::Arc::new(StaticCertSource::new(material.clone()))
+                    as std::sync::Arc<dyn CertSource>)
+            }
+            _ => None,
+        };
         match (source, material) {
             (Some(source), _) => {
-                let channel = rotating_mtls::channel(endpoint, source, timeout)
+                let channel = rotating_mtls::channel(endpoint, source, timeout, expected_id)
                     .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
                 Ok(Some(Self::Live(channel)))
             }
