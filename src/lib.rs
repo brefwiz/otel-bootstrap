@@ -921,13 +921,13 @@ impl TelemetryBuilder {
         )?;
 
         // Tracer
-        let trace_exporter = build_span_exporter(
+        let trace_exporter = export_retry::RetryUnavailable::new(build_span_exporter(
             protocol,
             &endpoint,
             export_timeout,
             #[cfg(feature = "grpc-mtls")]
             mtls_transport.as_ref(),
-        )?;
+        )?);
 
         let batch_processor = if let Some(size) = self.max_export_batch_size {
             BatchSpanProcessor::builder(trace_exporter)

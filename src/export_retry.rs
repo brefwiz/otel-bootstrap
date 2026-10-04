@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! A log export refused as unavailable is attempted again before it is lost.
+//! A log or span export refused as unavailable is attempted again before it is lost.
 //!
-//! The first log batch of a process leaves about a second after boot, and it
-//! carries the service's boot-time logs. A pod can reach that moment before
+//! The first log and span batches of a process leave about a second after boot,
+//! and carry the service's boot-time telemetry. A pod can reach that moment before
 //! the route to the collector's Service is programmed, so the connect is
 //! refused. `opentelemetry-otlp` makes one attempt per batch, and its own
 //! retry (`experimental-grpc-retry`) sleeps on the Tokio timer from the batch
@@ -16,6 +16,7 @@ use opentelemetry::logs::Severity;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
+use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 
 /// Delays before the second, third and fourth attempt.
 const BACKOFF: [Duration; 3] = [
@@ -24,7 +25,7 @@ const BACKOFF: [Duration; 3] = [
     Duration::from_millis(800),
 ];
 
-/// Wraps a [`LogExporter`], retrying an export that failed as `Unavailable`.
+/// Wraps a [`LogExporter`] or [`SpanExporter`], retrying an export that failed as `Unavailable`.
 #[derive(Debug)]
 pub(crate) struct RetryUnavailable<E> {
     inner: E,
@@ -92,6 +93,35 @@ impl<E: LogExporter> LogExporter for RetryUnavailable<E> {
     }
 }
 
+impl<E: SpanExporter> SpanExporter for RetryUnavailable<E> {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        if self.runtime.is_none() {
+            return self.inner.export(batch).await;
+        }
+        let mut result = self.inner.export(batch.clone()).await;
+        for delay in self.backoff {
+            if !is_unavailable(&result) {
+                break;
+            }
+            self.pause(*delay).await;
+            result = self.inner.export(batch.clone()).await;
+        }
+        result
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn set_resource(&mut self, resource: &Resource) {
+        self.inner.set_resource(resource);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +141,18 @@ mod tests {
     impl LogExporter for Flaky {
         async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
             assert_eq!(batch.iter().count(), 0);
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call < self.failures {
+                Err(OTelSdkError::InternalFailure(self.error.into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl SpanExporter for Flaky {
+        async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+            assert!(batch.is_empty());
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             if call < self.failures {
                 Err(OTelSdkError::InternalFailure(self.error.into()))
@@ -150,6 +192,13 @@ mod tests {
         let exporter = flaky(usize::MAX, "gRPC code: InvalidArgument");
         assert!(exporter.export(LogBatch::new(&[])).await.is_err());
         assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_span_export_is_retried_until_it_succeeds() {
+        let exporter = flaky(2, "gRPC code: Unavailable");
+        assert!(SpanExporter::export(&exporter, Vec::new()).await.is_ok());
+        assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 3);
     }
 
     #[test]
