@@ -90,7 +90,7 @@ opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio
 # explicitly so `runtime_metrics` can read Handle/RuntimeMetrics and spawn the
 # scheduler probe without relying on a transitive feature staying enabled.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
-opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
+opentelemetry-otlp = { version = "0.33", features = ["metrics", "logs"] }
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
