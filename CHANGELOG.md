@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.21.1] — 2026-10-04
+
+### Fixed
+
+- **Boot-time logs and spans are no longer dropped by a refused first export.**
+  The log and span exporters made one attempt per batch, so a first connect
+  refused while a pod's route to the collector was not yet programmed lost the
+  batch. An `Unavailable` export is now retried up to three times (200, 400 and
+  800ms). Metrics are unchanged: cumulative temporality covers a missed export.
+
 ## [2.21.0] — 2026-10-04
 
 ### Added
