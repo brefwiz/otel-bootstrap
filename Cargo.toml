@@ -163,7 +163,7 @@ uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
 # The boot timeline tests export to an in-process OTLP/gRPC collector, so they
 # prove the timestamps that actually leave the process.
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace"] }
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace", "logs"] }
 tonic = "0.14"
 
 # Real-process probe for heap profiling. Not shipped to consumers — gated behind

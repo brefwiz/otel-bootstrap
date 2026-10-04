@@ -41,6 +41,7 @@ mod runtime_metrics;
 
 pub mod boot;
 pub mod export_backoff;
+mod export_retry;
 pub mod instrumented_port;
 #[cfg(feature = "grpc-mtls")]
 mod rotating_mtls;
@@ -920,13 +921,13 @@ impl TelemetryBuilder {
         )?;
 
         // Tracer
-        let trace_exporter = build_span_exporter(
+        let trace_exporter = export_retry::RetryUnavailable::new(build_span_exporter(
             protocol,
             &endpoint,
             export_timeout,
             #[cfg(feature = "grpc-mtls")]
             mtls_transport.as_ref(),
-        )?;
+        )?);
 
         let batch_processor = if let Some(size) = self.max_export_batch_size {
             BatchSpanProcessor::builder(trace_exporter)
@@ -1007,7 +1008,7 @@ impl TelemetryBuilder {
 
             let lp = SdkLoggerProvider::builder()
                 .with_resource(resource)
-                .with_batch_exporter(log_exporter)
+                .with_batch_exporter(export_retry::RetryUnavailable::new(log_exporter))
                 .build();
 
             Some(lp)
