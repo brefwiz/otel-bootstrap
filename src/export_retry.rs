@@ -176,21 +176,33 @@ mod tests {
     #[tokio::test]
     async fn an_unavailable_export_is_retried_until_it_succeeds() {
         let exporter = flaky(2, "gRPC code: Unavailable: Connection refused");
-        assert!(exporter.export(LogBatch::new(&[])).await.is_ok());
+        assert!(
+            LogExporter::export(&exporter, LogBatch::new(&[]))
+                .await
+                .is_ok()
+        );
         assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
     async fn retries_are_bounded_and_the_last_failure_is_returned() {
         let exporter = flaky(usize::MAX, "gRPC code: Unavailable");
-        assert!(exporter.export(LogBatch::new(&[])).await.is_err());
+        assert!(
+            LogExporter::export(&exporter, LogBatch::new(&[]))
+                .await
+                .is_err()
+        );
         assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
     async fn any_other_failure_is_not_retried() {
         let exporter = flaky(usize::MAX, "gRPC code: InvalidArgument");
-        assert!(exporter.export(LogBatch::new(&[])).await.is_err());
+        assert!(
+            LogExporter::export(&exporter, LogBatch::new(&[]))
+                .await
+                .is_err()
+        );
         assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 1);
     }
 
@@ -204,7 +216,7 @@ mod tests {
     #[test]
     fn outside_a_runtime_a_single_attempt_is_made() {
         let exporter = flaky(usize::MAX, "gRPC code: Unavailable");
-        let result = futures_executor_block(exporter.export(LogBatch::new(&[])));
+        let result = futures_executor_block(LogExporter::export(&exporter, LogBatch::new(&[])));
         assert!(result.is_err());
         assert_eq!(exporter.inner.calls.load(Ordering::SeqCst), 1);
     }
