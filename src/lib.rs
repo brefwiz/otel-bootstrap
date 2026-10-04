@@ -404,6 +404,7 @@ impl Telemetry {
         TelemetryBuilder {
             service_name: Some(service_name.to_string()),
             service_version: None,
+            service_namespace: None,
             deployment_environment: None,
             sampler: None,
             metrics: true,
@@ -444,6 +445,7 @@ impl Telemetry {
         TelemetryBuilder {
             service_name: None,
             service_version: None,
+            service_namespace: None,
             deployment_environment: None,
             sampler: None,
             metrics: true,
@@ -493,6 +495,7 @@ impl Telemetry {
 pub struct TelemetryBuilder {
     service_name: Option<String>,
     service_version: Option<String>,
+    service_namespace: Option<String>,
     deployment_environment: Option<String>,
     sampler: Option<TraceSampler>,
     metrics: bool,
@@ -547,6 +550,13 @@ impl TelemetryBuilder {
     /// Set the service version (maps to `service.version` resource attribute).
     pub fn with_version(mut self, version: &str) -> Self {
         self.service_version = Some(version.to_string());
+        self
+    }
+
+    /// Set the service namespace (maps to `service.namespace`). Unset, or an
+    /// empty value, leaves the attribute off the resource.
+    pub fn with_service_namespace(mut self, namespace: &str) -> Self {
+        self.service_namespace = Some(namespace.to_string()).filter(|n| !n.is_empty());
         self
     }
 
@@ -888,8 +898,9 @@ impl TelemetryBuilder {
             std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "unknown_service".to_string())
         });
 
-        let resource = build_resource(
+        let resource = build_resource_in(
             &service_name,
+            self.service_namespace.as_deref(),
             self.service_version.as_deref(),
             self.deployment_environment.as_deref(),
         );
@@ -1352,6 +1363,15 @@ pub fn build_resource(
     service_version: Option<&str>,
     deployment_environment: Option<&str>,
 ) -> Resource {
+    build_resource_in(service_name, None, service_version, deployment_environment)
+}
+
+fn build_resource_in(
+    service_name: &str,
+    service_namespace: Option<&str>,
+    service_version: Option<&str>,
+    deployment_environment: Option<&str>,
+) -> Resource {
     let hostname = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
@@ -1363,6 +1383,10 @@ pub fn build_resource(
             KeyValue::new(HOST_NAME, hostname),
             KeyValue::new(PROCESS_PID, std::process::id() as i64),
         ]);
+
+    if let Some(namespace) = service_namespace {
+        builder = builder.with_attribute(KeyValue::new("service.namespace", namespace.to_string()));
+    }
 
     if let Some(version) = service_version {
         builder = builder.with_attribute(KeyValue::new(SERVICE_VERSION, version.to_string()));
@@ -1561,6 +1585,26 @@ mod tests {
                 .get(&opentelemetry::Key::new(PROCESS_PID))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn resource_carries_the_service_namespace_only_when_set() {
+        let key = opentelemetry::Key::new("service.namespace");
+        let with = build_resource_in("svc", Some("is.brefwiz.internal"), None, None);
+        assert_eq!(
+            with.get(&key),
+            Some(opentelemetry::Value::from("is.brefwiz.internal")),
+        );
+        assert!(build_resource("svc", None, None).get(&key).is_none());
+    }
+
+    #[test]
+    fn builder_namespace_is_absent_unless_non_empty() {
+        let set = Telemetry::builder("svc").with_service_namespace("realm.example");
+        assert_eq!(set.service_namespace.as_deref(), Some("realm.example"));
+        let empty = Telemetry::builder("svc").with_service_namespace("");
+        assert!(empty.service_namespace.is_none());
+        assert!(Telemetry::builder("svc").service_namespace.is_none());
     }
 
     #[test]
