@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] — 2026-10-05
+
+### Changed
+
+- Upgrade the complete OpenTelemetry dependency family to `0.33` and
+  `tracing-opentelemetry` to `0.34`, including the OTLP test protocol types.
+  Existing OTLP trace, metric and log exporters and instrumented outbound
+  client span attributes remain supported.
+- Preserve provider-owned trace and log export retries and single-attempt
+  metric exports by disabling the new upstream exporter retry policy.
+- Update Tokio to `1.53.1`, serde_json to `1.0.151`, UUID to `1.26.1`, and
+  the integration collector to `0.161.0`.
+
 ## [2.21.1] — 2026-10-04
 
 ### Fixed
