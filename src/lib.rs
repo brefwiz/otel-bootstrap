@@ -60,6 +60,10 @@ pub use spanned::{Spanned, in_span};
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry_otlp::WithExportConfig;
+#[cfg(feature = "http")]
+use opentelemetry_otlp::WithHttpConfig;
+#[cfg(feature = "grpc")]
+use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::{
     Resource,
     logs::SdkLoggerProvider,
@@ -1249,11 +1253,14 @@ fn build_span_exporter(
     timeout: Option<Duration>,
     #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error>> {
+    // RetryUnavailable owns delays on the captured runtime; upstream retries
+    // would block exporter workers and multiply attempts.
     match protocol {
         #[cfg(feature = "grpc")]
         ExportProtocol::Grpc => {
             let mut b = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
@@ -1268,6 +1275,7 @@ fn build_span_exporter(
         ExportProtocol::HttpProtobuf => {
             let mut b = opentelemetry_otlp::SpanExporter::builder()
                 .with_http()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
@@ -1283,11 +1291,13 @@ fn build_metric_exporter(
     timeout: Option<Duration>,
     #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::MetricExporter, Box<dyn Error>> {
+    // Cumulative metrics recover from a missed export without retries.
     match protocol {
         #[cfg(feature = "grpc")]
         ExportProtocol::Grpc => {
             let mut b = opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
@@ -1302,6 +1312,7 @@ fn build_metric_exporter(
         ExportProtocol::HttpProtobuf => {
             let mut b = opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
@@ -1317,11 +1328,13 @@ fn build_log_exporter(
     timeout: Option<Duration>,
     #[cfg(feature = "grpc-mtls")] mtls: Option<&MtlsTransport>,
 ) -> Result<opentelemetry_otlp::LogExporter, Box<dyn Error>> {
+    // RetryUnavailable owns delays on the captured runtime, as for spans.
     match protocol {
         #[cfg(feature = "grpc")]
         ExportProtocol::Grpc => {
             let mut b = opentelemetry_otlp::LogExporter::builder()
                 .with_tonic()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
@@ -1336,6 +1349,7 @@ fn build_log_exporter(
         ExportProtocol::HttpProtobuf => {
             let mut b = opentelemetry_otlp::LogExporter::builder()
                 .with_http()
+                .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
                 .with_endpoint(endpoint);
             if let Some(t) = timeout {
                 b = b.with_timeout(t);
