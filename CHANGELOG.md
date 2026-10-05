@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] — 2026-10-05
+
+### Changed
+
+- **OpenTelemetry 0.33 support.** Upgrade the API, SDK, OTLP exporters, tracing
+  appender, semantic conventions and protocol types together, with
+  `tracing-opentelemetry` 0.34. Preserve OTLP traces, metrics and logs, outbound
+  client spans and the existing export retry policy.
+- Validate telemetry against OpenTelemetry Collector Contrib 0.161.0 in CI.
+
 ## [2.21.1] — 2026-10-04
 
 ### Fixed
