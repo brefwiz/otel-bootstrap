@@ -1,6 +1,6 @@
 [package]
 name = "otel-bootstrap"
-version = "2.21.1"
+version = "2.22.0"
 edition = "2024"
 authors = ["Gregoire Salingue"]
 description = "One-call OpenTelemetry bootstrap — traces + metrics with OTLP export"
@@ -83,19 +83,19 @@ profiling-memory-probe = ["profiling-memory-jemalloc", "dep:tikv-jemallocator", 
 profiling-rss-probe = ["profiling-bridge-pyroscope-rs", "tokio/rt-multi-thread", "dep:flate2"]
 
 [dependencies]
-opentelemetry = { version = "0.32", features = ["metrics", "logs"] }
-opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio"] }
+opentelemetry = { version = "0.33", features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.33", features = ["metrics", "logs", "rt-tokio"] }
 # Already a hard runtime dependency via opentelemetry_sdk's `rt-tokio`: the
 # metrics PeriodicReader needs a Tokio runtime to export at all. Declared
 # explicitly so `runtime_metrics` can read Handle/RuntimeMetrics and spawn the
 # scheduler probe without relying on a transitive feature staying enabled.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
-opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
-opentelemetry-appender-tracing = "0.32"
-tracing-opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", features = ["metrics", "logs"] }
+opentelemetry-appender-tracing = "0.33"
+tracing-opentelemetry = "0.34"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing = "0.1"
-opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
 hostname = "0.4"
 url = "2.5"
 axum = { version = "=0.8", optional = true }
@@ -157,13 +157,13 @@ required-features = ["testing"]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 serde_yaml = "0.9"
-opentelemetry = { version = "0.32", features = ["trace"] }
+opentelemetry = { version = "0.33", features = ["trace"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
 # The boot timeline tests export to an in-process OTLP/gRPC collector, so they
 # prove the timestamps that actually leave the process.
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace", "logs"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic", "trace", "logs"] }
 tonic = "0.14"
 
 # Real-process probe for heap profiling. Not shipped to consumers — gated behind

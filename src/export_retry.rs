@@ -4,11 +4,9 @@
 //! The first log and span batches of a process leave about a second after boot,
 //! and carry the service's boot-time telemetry. A pod can reach that moment before
 //! the route to the collector's Service is programmed, so the connect is
-//! refused. `opentelemetry-otlp` makes one attempt per batch, and its own
-//! retry (`experimental-grpc-retry`) sleeps on the Tokio timer from the batch
-//! processor's plain thread, where no runtime is entered, and panics. This
-//! wrapper retries on the runtime that was current at construction instead,
-//! so the delay runs wherever the processor thread is.
+//! refused. Transport retries are disabled so this wrapper owns the retry budget.
+//! It retries on the runtime that was current at construction, so the delay
+//! runs wherever the processor thread is.
 
 use std::time::Duration;
 
