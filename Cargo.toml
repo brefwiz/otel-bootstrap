@@ -91,7 +91,7 @@ opentelemetry_sdk = { version = "0.32", features = ["metrics", "logs", "rt-tokio
 # scheduler probe without relying on a transitive feature staying enabled.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 opentelemetry-otlp = { version = "0.32", features = ["metrics", "logs"] }
-opentelemetry-appender-tracing = "0.32"
+opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing = "0.1"
